@@ -20,7 +20,7 @@ struct HydratedView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(red: 0.2, green: 0.55, blue: 0.9))
+        .background(Color(red: 0.2, green: 0.55, blue: 0.9).ignoresSafeArea())
     }
 }
 
