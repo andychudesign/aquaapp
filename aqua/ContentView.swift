@@ -8,11 +8,17 @@ import SwiftUI
 struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
 
+    private var rootBackground: Color {
+        viewModel.hydrationLevel > 0
+            ? Color(red: 0.2, green: 0.55, blue: 0.9)
+            : Color(red: 0.95, green: 0.95, blue: 0.95)
+    }
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
                 hydrationVisual
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 logWaterButton
                 lastLogText
                     .padding(.top, 16)
@@ -21,7 +27,8 @@ struct ContentView: View {
             .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.95, green: 0.95, blue: 0.95).ignoresSafeArea())
+        .background(rootBackground.ignoresSafeArea())
+        .animation(.easeInOut(duration: 0.15), value: viewModel.hydrationLevel)
     }
 
     /// Interpolates between dehydrated and hydrated visuals over the 5s transition.
