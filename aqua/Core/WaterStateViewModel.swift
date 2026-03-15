@@ -39,7 +39,7 @@ final class WaterStateViewModel {
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.
     private func startRefreshTimerIfNeeded() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 let level = SharedStorage.hydrationLevel()
                 self?.hydrationLevel = level

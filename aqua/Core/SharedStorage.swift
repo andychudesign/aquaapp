@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import WidgetKit
 
 /// App Group identifier shared between the main app and the widget.
 enum SharedStorage {
@@ -14,7 +15,7 @@ enum SharedStorage {
     }
 
     private static let lastWaterLogTimeKey = "lastWaterLogTime"
-    private static let hydrationDuration: TimeInterval = 5.0
+    private static let hydrationDuration: TimeInterval = 7200
 
     /// When the user last tapped "I drank water". Used to compute hydration level in app and widget.
     static var lastWaterLogTime: Date? {
@@ -37,5 +38,6 @@ enum SharedStorage {
     /// Record that the user just drank water.
     static func logWater() {
         lastWaterLogTime = Date()
+        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
     }
 }

@@ -66,6 +66,8 @@ struct ContentView: View {
     @State private var wavePhase: Double = 0
     @State private var buttonFrame: CGRect = .zero
     @State private var sloshAmplitude: CGFloat = 0
+    @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
+    @State private var showWelcome = false
     @Environment(\.scenePhase) private var scenePhase
 
     private static let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
@@ -121,6 +123,22 @@ struct ContentView: View {
                 viewModel.refreshFromStorage()
             }
         }
+        .overlay {
+            if showWelcome {
+                WelcomeView {
+                    hasSeenWelcome = true
+                    withAnimation(.spring(duration: 0.4)) {
+                        showWelcome = false
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .onAppear {
+            if !hasSeenWelcome {
+                showWelcome = true
+            }
+        }
     }
 
     private var headerOnWater: Bool { viewModel.hydrationLevel > 0.78 }
@@ -159,7 +177,6 @@ struct ContentView: View {
             .frame(height: max(0, totalHeight))
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
-        .animation(.easeInOut(duration: 0.25), value: viewModel.hydrationLevel)
         .onAppear {
             withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
                 wavePhase = 1
@@ -230,7 +247,9 @@ struct ContentView: View {
 
     private var logWaterButton: some View {
         Button {
-            viewModel.logWater()
+            withAnimation(.easeInOut(duration: 0.5)) {
+                viewModel.logWater()
+            }
             sloshAmplitude = 10
             withAnimation(.interpolatingSpring(stiffness: 18, damping: 3)) {
                 sloshAmplitude = 0

@@ -8,7 +8,7 @@ import WidgetKit
 import SwiftUI
 
 private let appGroupID = "group.andychudesign.aqua"
-private let hydrationDuration: TimeInterval = 5.0
+private let hydrationDuration: TimeInterval = 7200
 private let fillDuration: TimeInterval = 1.0
 private let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
 private let dehydratedBg = Color(red: 0.98, green: 0.96, blue: 0.92)
@@ -79,14 +79,15 @@ struct AquaTimelineProvider: TimelineProvider {
             }
         }
 
-        // Drain phase: 0.5s steps
+        // Drain phase: update every 5 minutes over the 2-hour window
+        let drainStep: TimeInterval = 300
         var t = max(elapsed, fillDuration)
         while t < totalDuration {
             let d = logTime.addingTimeInterval(t)
-            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 0.1 }) ?? true {
+            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 1 }) ?? true {
                 entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
             }
-            t += 0.5
+            t += drainStep
         }
 
         if entries.last?.hydrationLevel != 0 {
@@ -119,6 +120,8 @@ struct AquaTimelineProvider: TimelineProvider {
 // MARK: - Static wave shape for widget surface decoration
 
 struct WidgetWaveShape: Shape {
+    var phase: Double = 0
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
         let w = rect.width
@@ -126,14 +129,15 @@ struct WidgetWaveShape: Shape {
 
         let amp: CGFloat = 3
         let headroom = amp * 2.5
+        let p = phase * .pi * 2
 
         path.move(to: CGPoint(x: 0, y: headroom))
 
         for x in stride(from: 0, through: w, by: 1) {
             let t = x / w
             let y = headroom
-                + amp * sin(t * 1.5 * .pi * 2)
-                + amp * 0.3 * sin(t * 2.2 * .pi * 2 + 1.0)
+                + amp * sin(t * 1.5 * .pi * 2 + p)
+                + amp * 0.3 * sin(t * 2.2 * .pi * 2 + 1.0 + p * 0.6)
             path.addLine(to: CGPoint(x: x, y: y))
         }
 
@@ -261,11 +265,12 @@ struct AquaWidgetView: View {
         GeometryReader { geo in
             let waveHeadroom: CGFloat = entry.hydrationLevel > 0 ? 8 : 0
             let waterHeight = geo.size.height * entry.hydrationLevel + waveHeadroom
+            let wavePhase = entry.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4
 
             ZStack(alignment: .bottom) {
                 dehydratedBg
 
-                WidgetWaveShape()
+                WidgetWaveShape(phase: wavePhase)
                     .fill(waterBlue)
                     .frame(height: max(0, waterHeight))
             }
