@@ -66,6 +66,7 @@ struct ContentView: View {
     @State private var wavePhase: Double = 0
     @State private var buttonFrame: CGRect = .zero
     @State private var sloshAmplitude: CGFloat = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     private static let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
     private static let dehydratedBackground = Color(red: 0.98, green: 0.96, blue: 0.92)
@@ -115,6 +116,11 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
         .onPreferenceChange(ButtonFrameKey.self) { buttonFrame = $0 }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                viewModel.refreshFromStorage()
+            }
+        }
     }
 
     private var headerOnWater: Bool { viewModel.hydrationLevel > 0.78 }
@@ -230,12 +236,11 @@ struct ContentView: View {
                 sloshAmplitude = 0
             }
         } label: {
-            Text("Drink")
-                .font(.custom("Inter-Medium", size: 22))
+            Image(systemName: "drop.fill")
+                .font(.system(size: 24, weight: .medium))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 48)
-                .padding(.vertical, 16)
-                .background(Self.waterBlue, in: Capsule())
+                .padding(20)
+                .background(Self.waterBlue, in: Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("I drank water")

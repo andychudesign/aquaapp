@@ -20,6 +20,15 @@ final class WaterStateViewModel {
         startRefreshTimerIfNeeded()
     }
 
+    /// Re-read shared storage so the app stays in sync after a widget tap or returning from background.
+    func refreshFromStorage() {
+        let level = SharedStorage.hydrationLevel()
+        hydrationLevel = level
+        if level > 0 {
+            startRefreshTimerIfNeeded()
+        }
+    }
+
     /// Call when the user taps "I drank water". Persists for widget and animates back over 5s.
     func logWater() {
         SharedStorage.logWater()
