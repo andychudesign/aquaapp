@@ -9,8 +9,11 @@ import SwiftUI
 
 private let appGroupID = "group.andychudesign.aqua"
 private let hydrationDuration: TimeInterval = 5.0
+private let fillDuration: TimeInterval = 1.0
+private let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
+private let dehydratedBg = Color(red: 0.98, green: 0.96, blue: 0.92)
 
-// MARK: - App Intent (log water from widget without opening app)
+// MARK: - App Intent
 
 struct LogWaterIntent: AppIntent {
     static let title: LocalizedStringResource = "I drank water"
@@ -35,132 +38,186 @@ struct AquaTimelineProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (AquaWidgetEntry) -> Void) {
-        let entry = AquaWidgetEntry(date: Date(), hydrationLevel: Self.hydrationLevel(at: Date()))
-        completion(entry)
+        completion(AquaWidgetEntry(date: Date(), hydrationLevel: Self.hydrationLevel(at: Date())))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AquaWidgetEntry>) -> Void) {
         let now = Date()
-        let level = Self.hydrationLevel(at: now)
+        let suite = UserDefaults(suiteName: appGroupID)
 
-        let nextUpdate: Date
-        if level > 0 {
-            let suite = UserDefaults(suiteName: appGroupID)
-            let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date ?? now
-            nextUpdate = logTime.addingTimeInterval(hydrationDuration)
-        } else {
-            nextUpdate = now.addingTimeInterval(60)
+        guard let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date else {
+            completion(Timeline(
+                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0)],
+                policy: .after(now.addingTimeInterval(60))
+            ))
+            return
         }
 
-        let entries = [
-            AquaWidgetEntry(date: now, hydrationLevel: level),
-            AquaWidgetEntry(date: nextUpdate, hydrationLevel: 0)
-        ]
-        let timeline = Timeline(entries: entries, policy: .after(nextUpdate))
-        completion(timeline)
+        let elapsed = now.timeIntervalSince(logTime)
+        let totalDuration = fillDuration + hydrationDuration
+        let endTime = logTime.addingTimeInterval(totalDuration)
+
+        guard elapsed < totalDuration else {
+            completion(Timeline(
+                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0)],
+                policy: .after(now.addingTimeInterval(60))
+            ))
+            return
+        }
+
+        var entries: [AquaWidgetEntry] = []
+
+        // Fill phase: 0.1s steps so water visibly rises
+        if elapsed < fillDuration {
+            var t = elapsed
+            while t < fillDuration {
+                let d = logTime.addingTimeInterval(t)
+                if d >= now {
+                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
+                }
+                t += 0.1
+            }
+        }
+
+        // Drain phase: 0.5s steps
+        var t = max(elapsed, fillDuration)
+        while t < totalDuration {
+            let d = logTime.addingTimeInterval(t)
+            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 0.1 }) ?? true {
+                entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
+            }
+            t += 0.5
+        }
+
+        if entries.last?.hydrationLevel != 0 {
+            entries.append(AquaWidgetEntry(date: endTime, hydrationLevel: 0))
+        }
+
+        if entries.isEmpty {
+            entries.append(AquaWidgetEntry(date: now, hydrationLevel: Self.hydrationLevel(at: now)))
+        }
+
+        completion(Timeline(entries: entries, policy: .after(endTime)))
     }
 
     static func hydrationLevel(at date: Date) -> Double {
         let suite = UserDefaults(suiteName: appGroupID)
         guard let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date else { return 0 }
         let elapsed = date.timeIntervalSince(logTime)
-        if elapsed >= hydrationDuration { return 0 }
-        return max(0, 1 - elapsed / hydrationDuration)
+        if elapsed < 0 { return 0 }
+
+        if elapsed < fillDuration {
+            return elapsed / fillDuration
+        }
+
+        let drainElapsed = elapsed - fillDuration
+        if drainElapsed >= hydrationDuration { return 0 }
+        return max(0, 1 - drainElapsed / hydrationDuration)
     }
 }
 
-// MARK: - Widget views (same concept: dehydrated / hydrated)
+// MARK: - Static wave shape for widget surface decoration
+
+struct WidgetWaveShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let w = rect.width
+        guard w > 0 else { return path }
+
+        let amp: CGFloat = 3
+        let headroom = amp * 2.5
+
+        path.move(to: CGPoint(x: 0, y: headroom))
+
+        for x in stride(from: 0, through: w, by: 1) {
+            let t = x / w
+            let y = headroom
+                + amp * sin(t * 1.5 * .pi * 2)
+                + amp * 0.3 * sin(t * 2.2 * .pi * 2 + 1.0)
+            path.addLine(to: CGPoint(x: x, y: y))
+        }
+
+        path.addLine(to: CGPoint(x: w, y: rect.maxY))
+        path.addLine(to: CGPoint(x: 0, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+// MARK: - Widget views
 
 struct AquaWidgetView: View {
     var entry: AquaWidgetEntry
     @Environment(\.widgetFamily) var family
 
+    private var isHydrated: Bool { entry.hydrationLevel > 0 }
+
     var body: some View {
         switch family {
-        case .systemSmall:
-            smallView
-        case .systemMedium:
-            mediumView
-        case .accessoryCircular:
-            circularView
-        case .accessoryRectangular:
-            rectangularView
-        default:
-            smallView
+        case .systemSmall:       smallView
+        case .systemMedium:      mediumView
+        case .accessoryCircular: circularView
+        case .accessoryRectangular: rectangularView
+        default: smallView
         }
     }
+
+    // MARK: Small
 
     private var smallView: some View {
-        ZStack {
-            ContainerRelativeShape()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(red: 0.95, green: 0.97, blue: 1.0),
-                        Color(red: 0.88, green: 0.94, blue: 0.98)
-                ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ))
-            VStack(spacing: 6) {
-                dropletImage
-                statusText
-                Button(intent: LogWaterIntent()) {
-                    Label("I drank water", systemImage: "drop.fill")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color(red: 0.2, green: 0.55, blue: 0.85))
-                        )
-                }
-                .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Text(isHydrated ? "Aqua" : "Sip")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isHydrated ? .white : Color(white: 0.15))
+                Text(isHydrated ? "水" : "飲")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isHydrated ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+            }
+            .contentTransition(.interpolate)
+
+            Spacer()
+
+            HStack {
+                Spacer()
+                drinkButton
             }
         }
+        .containerBackground(for: .widget) { waterFillBackground }
     }
 
+    // MARK: Medium
+
     private var mediumView: some View {
-        ZStack {
-            ContainerRelativeShape()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(red: 0.95, green: 0.97, blue: 1.0),
-                        Color(red: 0.88, green: 0.94, blue: 0.98)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ))
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 16) {
-                    Image(systemName: "drop.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(entry.hydrationLevel > 0 ? Color(red: 0.2, green: 0.6, blue: 0.9) : Color(red: 0.4, green: 0.5, blue: 0.6))
-                    statusText
-                    Spacer(minLength: 0)
-                }
-                Button(intent: LogWaterIntent()) {
-                    Label("I drank water", systemImage: "drop.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color(red: 0.2, green: 0.55, blue: 0.85))
-                        )
-                }
-                .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Text(isHydrated ? "Aqua" : "Sip")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isHydrated ? .white : Color(white: 0.15))
+                Text(isHydrated ? "水" : "飲")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isHydrated ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
             }
-            .padding()
+            .contentTransition(.interpolate)
+
+            Spacer()
+
+            HStack {
+                Spacer()
+                drinkButton
+            }
         }
+        .containerBackground(for: .widget) { waterFillBackground }
     }
+
+    // MARK: Accessory
 
     private var circularView: some View {
         Button(intent: LogWaterIntent()) {
             ZStack {
                 AccessoryWidgetBackground()
-                dropletImage
+                Image(systemName: "drop.fill")
+                    .font(.title)
             }
         }
         .buttonStyle(.plain)
@@ -169,32 +226,48 @@ struct AquaWidgetView: View {
     private var rectangularView: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                dropletImage
-                statusText
+                Image(systemName: "drop.fill")
+                    .font(.title3)
+                Text(isHydrated ? "Hydrated" : "Dehydrated")
+                    .font(.caption.weight(.semibold))
             }
             Button(intent: LogWaterIntent()) {
-                Text("I drank water")
+                Text("Drink")
                     .font(.caption2.weight(.medium))
             }
             .buttonStyle(.plain)
         }
     }
 
-    private var dropletImage: some View {
-        Image(systemName: "drop.fill")
-            .font(family == .accessoryCircular ? .title : .title2)
-            .foregroundStyle(entry.hydrationLevel > 0 ? Color(red: 0.2, green: 0.6, blue: 0.9) : Color(red: 0.4, green: 0.5, blue: 0.6))
+    // MARK: Drink button
+
+    private var drinkButton: some View {
+        Button(intent: LogWaterIntent()) {
+            Image(systemName: "drop.fill")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(isHydrated ? .white : waterBlue)
+                .padding(10)
+                .background(
+                    Circle().fill(isHydrated ? Color.white.opacity(0.25) : waterBlue.opacity(0.15))
+                )
+        }
+        .buttonStyle(.plain)
+        .contentTransition(.interpolate)
     }
 
-    private var statusText: some View {
-        Group {
-            if entry.hydrationLevel > 0 {
-                Text("Hydrated")
-                    .font(.caption.weight(.semibold))
-            } else {
-                Text("Dehydrated")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+    // MARK: Water-fill background
+
+    private var waterFillBackground: some View {
+        GeometryReader { geo in
+            let waveHeadroom: CGFloat = entry.hydrationLevel > 0 ? 8 : 0
+            let waterHeight = geo.size.height * entry.hydrationLevel + waveHeadroom
+
+            ZStack(alignment: .bottom) {
+                dehydratedBg
+
+                WidgetWaveShape()
+                    .fill(waterBlue)
+                    .frame(height: max(0, waterHeight))
             }
         }
     }
@@ -210,7 +283,7 @@ struct AquaWidget: Widget {
             AquaWidgetView(entry: entry)
         }
         .configurationDisplayName("Aqua")
-        .description("See if you're hydrated. Tap to open and log water.")
+        .description("Track your hydration. Tap Drink to log water.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
     }
 }
@@ -219,5 +292,6 @@ struct AquaWidget: Widget {
     AquaWidget()
 } timeline: {
     AquaWidgetEntry(date: Date(), hydrationLevel: 0)
+    AquaWidgetEntry(date: Date(), hydrationLevel: 0.5)
     AquaWidgetEntry(date: Date(), hydrationLevel: 1)
 }
