@@ -9,7 +9,6 @@ import SwiftUI
 
 private let appGroupID = "group.andychudesign.aqua"
 private let hydrationDuration: TimeInterval = 7200
-private let fillDuration: TimeInterval = 1.0
 private let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
 private let dehydratedBg = Color(red: 0.98, green: 0.96, blue: 0.92)
 
@@ -54,10 +53,9 @@ struct AquaTimelineProvider: TimelineProvider {
         }
 
         let elapsed = now.timeIntervalSince(logTime)
-        let totalDuration = fillDuration + hydrationDuration
-        let endTime = logTime.addingTimeInterval(totalDuration)
+        let endTime = logTime.addingTimeInterval(hydrationDuration)
 
-        guard elapsed < totalDuration else {
+        guard elapsed < hydrationDuration else {
             completion(Timeline(
                 entries: [AquaWidgetEntry(date: now, hydrationLevel: 0)],
                 policy: .after(now.addingTimeInterval(60))
@@ -67,24 +65,12 @@ struct AquaTimelineProvider: TimelineProvider {
 
         var entries: [AquaWidgetEntry] = []
 
-        // Fill phase: 0.1s steps so water visibly rises
-        if elapsed < fillDuration {
-            var t = elapsed
-            while t < fillDuration {
-                let d = logTime.addingTimeInterval(t)
-                if d >= now {
-                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
-                }
-                t += 0.1
-            }
-        }
-
         // Drain phase: update every 5 minutes over the 2-hour window
         let drainStep: TimeInterval = 300
-        var t = max(elapsed, fillDuration)
-        while t < totalDuration {
+        var t = elapsed
+        while t < hydrationDuration {
             let d = logTime.addingTimeInterval(t)
-            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 1 }) ?? true {
+            if d >= now {
                 entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
             }
             t += drainStep
@@ -105,15 +91,8 @@ struct AquaTimelineProvider: TimelineProvider {
         let suite = UserDefaults(suiteName: appGroupID)
         guard let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date else { return 0 }
         let elapsed = date.timeIntervalSince(logTime)
-        if elapsed < 0 { return 0 }
-
-        if elapsed < fillDuration {
-            return elapsed / fillDuration
-        }
-
-        let drainElapsed = elapsed - fillDuration
-        if drainElapsed >= hydrationDuration { return 0 }
-        return max(0, 1 - drainElapsed / hydrationDuration)
+        if elapsed < 0 || elapsed >= hydrationDuration { return 0 }
+        return max(0, 1 - elapsed / hydrationDuration)
     }
 }
 
@@ -155,6 +134,8 @@ struct AquaWidgetView: View {
     @Environment(\.widgetFamily) var family
 
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
+    private var headerOnWater: Bool { entry.hydrationLevel > 0.75 }
+    private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
 
     var body: some View {
         switch family {
@@ -173,10 +154,10 @@ struct AquaWidgetView: View {
             HStack(spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isHydrated ? .white : Color(white: 0.15))
+                    .foregroundStyle(headerOnWater ? .white : Color(white: 0.15))
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isHydrated ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    .foregroundStyle(headerOnWater ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
             }
             .contentTransition(.interpolate)
 
@@ -197,10 +178,10 @@ struct AquaWidgetView: View {
             HStack(spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isHydrated ? .white : Color(white: 0.15))
+                    .foregroundStyle(headerOnWater ? .white : Color(white: 0.15))
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isHydrated ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    .foregroundStyle(headerOnWater ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
             }
             .contentTransition(.interpolate)
 
@@ -249,10 +230,10 @@ struct AquaWidgetView: View {
         Button(intent: LogWaterIntent()) {
             Image(systemName: "drop.fill")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(isHydrated ? .white : waterBlue)
+                .foregroundStyle(buttonOnWater ? .white : waterBlue)
                 .padding(10)
                 .background(
-                    Circle().fill(isHydrated ? Color.white.opacity(0.25) : waterBlue.opacity(0.15))
+                    Circle().fill(buttonOnWater ? Color.white.opacity(0.25) : waterBlue.opacity(0.15))
                 )
         }
         .buttonStyle(.plain)

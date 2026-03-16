@@ -28,21 +28,22 @@ private struct WelcomeWaveShape: Shape {
     }
 }
 
-// MARK: - Story progress bar
+// MARK: - Continuous progress bar
 
-private struct StoryBar: View {
-    var segmentCount: Int
-    var currentSegment: Int
+private struct ProgressBar: View {
+    var progress: Double
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<segmentCount, id: \.self) { i in
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(i <= currentSegment ? Color(white: 0.2) : Color(white: 0.8))
-                    .frame(height: 3)
+                    .fill(Color(white: 0.82))
+                Capsule()
+                    .fill(Color(white: 0.15))
+                    .frame(width: max(6, geo.size.width * progress))
             }
         }
-        .padding(.horizontal, 12)
+        .frame(width: 200, height: 3)
     }
 }
 
@@ -51,125 +52,115 @@ private struct StoryBar: View {
 struct WelcomeView: View {
     var onComplete: () -> Void
 
-    @State private var page = 0
+    @State private var phase = 0
+    @State private var progress: Double = 0.03
     @State private var waterFilled = false
-    @State private var contentVisible = false
+    @State private var descriptionsVisible = false
 
     private static let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
     private static let warmBg = Color(red: 0.98, green: 0.96, blue: 0.92)
 
     var body: some View {
         GeometryReader { geo in
-            ZStack {
+            ZStack(alignment: .bottom) {
                 Self.warmBg.ignoresSafeArea()
 
-                if page == 0 {
-                    firstPage(geo: geo)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing),
-                            removal: .move(edge: .leading)
-                        ))
-                } else {
-                    secondPage(geo: geo)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing),
-                            removal: .move(edge: .leading)
-                        ))
+                // Water background layer
+                ZStack(alignment: .top) {
+                    Self.waterBlue
+                    WelcomeWaveShape()
+                        .fill(Self.warmBg)
+                        .frame(height: 14)
+                }
+                .frame(height: waterFilled ? geo.size.height * 0.55 : 0)
+                .clipped()
+
+                // Foreground content
+                VStack(spacing: 0) {
+                    ProgressBar(progress: progress)
+                        .padding(.top, 78)
+
+                    ZStack {
+                        if phase < 2 {
+                            waterPhaseContent(geo: geo)
+                                .transition(.opacity)
+                        } else {
+                            widgetPhaseContent(geo: geo)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
                 }
             }
         }
         .ignoresSafeArea()
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                withAnimation(.easeInOut(duration: 1.8)) {
+                    phase = 1
+                    waterFilled = true
+                    progress = 0.5
+                }
+                withAnimation(.easeIn(duration: 0.6).delay(1.4)) {
+                    descriptionsVisible = true
+                }
+            }
+        }
     }
 
-    // MARK: Page 1 → 2 (water fill animation)
+    // MARK: Phase 0 & 1 — Water fill
 
-    private func firstPage(geo: GeometryProxy) -> some View {
-        let safeTop = geo.safeAreaInsets.top
+    private func waterPhaseContent(geo: GeometryProxy) -> some View {
+        VStack(spacing: 0) {
+            Spacer()
 
-        return ZStack(alignment: .bottom) {
-            Self.warmBg
+            headerText
+                .offset(y: phase >= 1 ? -geo.size.height * 0.15 : geo.size.height * 0.05)
 
-            // Water rising from bottom
-            ZStack(alignment: .top) {
-                Self.waterBlue
-                WelcomeWaveShape()
-                    .fill(Self.warmBg)
-                    .frame(height: 14)
-            }
-            .frame(height: waterFilled ? geo.size.height * 0.55 : 0)
-            .clipped()
-
-            // Foreground content
-            VStack(spacing: 0) {
-                StoryBar(segmentCount: 2, currentSegment: 0)
-                    .padding(.top, safeTop + 10)
-
-                Spacer()
-
-                // "Sip 飲" header — moves up when water fills
-                headerText
-                    .offset(y: waterFilled ? -geo.size.height * 0.15 : geo.size.height * 0.05)
-
-                if contentVisible {
-                    Text("Sipping aqua every 2 hours to stay hydrated!")
+            if descriptionsVisible {
+                VStack(spacing: 64) {
+                    Text("Sipping aqua every 2 hours to stay hydrated")
                         .font(.subheadline)
                         .foregroundStyle(Color(white: 0.5))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
-                        .offset(y: -geo.size.height * 0.08)
-                        .transition(.opacity)
+
+                    Text("每兩個鐘,見字飲水")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.6))
                 }
-
-                Spacer()
-
-                if contentVisible {
-                    VStack(spacing: 0) {
-                        Text("每兩個鐘,見字飲水")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.6))
-
-                        Spacer().frame(height: geo.size.height * 0.26)
-
-                        Button {
-                            withAnimation(.spring(duration: 0.5)) {
-                                page = 1
-                            }
-                        } label: {
-                            Text("Next")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.8))
-                                .padding(.horizontal, 48)
-                                .padding(.vertical, 14)
-                                .background(Capsule().fill(.white.opacity(0.25)))
-                        }
-
-                        Spacer().frame(height: 50)
-                    }
-                    .transition(.opacity)
-                }
+                .offset(y: -50)
             }
-        }
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                withAnimation(.easeInOut(duration: 1.8)) {
-                    waterFilled = true
+
+            Spacer()
+
+            if descriptionsVisible {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.8)) {
+                        waterFilled = false
+                        progress = 1.0
+                    }
+                    withAnimation(.easeInOut(duration: 0.6).delay(0.3)) {
+                        phase = 2
+                    }
+                } label: {
+                    Text("Next")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 48)
+                        .padding(.vertical, 14)
+                        .background(Capsule().fill(.white.opacity(0.25)))
                 }
-                withAnimation(.easeIn(duration: 0.6).delay(1.4)) {
-                    contentVisible = true
-                }
+
+                Spacer().frame(height: 50)
             }
         }
     }
 
-    // MARK: Page 3 (widget mockup)
+    // MARK: Phase 2 — Widget
 
-    private func secondPage(geo: GeometryProxy) -> some View {
-        let safeTop = geo.safeAreaInsets.top
-
-        return VStack(spacing: 0) {
-            StoryBar(segmentCount: 2, currentSegment: 1)
-                .padding(.top, safeTop + 10)
-
+    private func widgetPhaseContent(geo: GeometryProxy) -> some View {
+        VStack(spacing: 0) {
             Spacer().frame(height: geo.size.height * 0.06)
 
             headerText
@@ -181,12 +172,16 @@ struct WelcomeView: View {
                 .foregroundStyle(Color(white: 0.55))
                 .multilineTextAlignment(.center)
 
-            Spacer().frame(height: geo.size.height * 0.04)
+            Spacer().frame(height: 20)
 
-            phoneMockup
-                .frame(maxHeight: geo.size.height * 0.5)
+            Image("WidgetScreenshot")
+                .resizable()
+                .scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+                .padding(.horizontal, 32)
 
-            Spacer()
+            Spacer().frame(height: 24)
 
             Button(action: onComplete) {
                 Text("Get Started")
@@ -210,105 +205,8 @@ struct WelcomeView: View {
                 .foregroundStyle(Color(white: 0.1))
             Text("飲")
                 .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(Self.waterBlue)
+                .foregroundStyle(Color(red: 0, green: 0.208, blue: 0.925))
         }
-    }
-
-    // MARK: Phone mockup for page 3
-
-    private var phoneMockup: some View {
-        ZStack {
-            // Phone body
-            RoundedRectangle(cornerRadius: 40, style: .continuous)
-                .fill(Color(white: 0.08))
-
-            // Screen
-            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.35, green: 0.55, blue: 0.75),
-                            Color(red: 0.25, green: 0.45, blue: 0.7)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .padding(4)
-                .overlay {
-                    VStack(spacing: 0) {
-                        Capsule()
-                            .fill(.black)
-                            .frame(width: 72, height: 22)
-                            .padding(.top, 12)
-
-                        Spacer()
-
-                        widgetGalleryCard
-                            .padding(.horizontal, 16)
-
-                        Spacer()
-                    }
-                    .padding(4)
-                }
-        }
-        .frame(width: 210, height: 430)
-        .shadow(color: .black.opacity(0.18), radius: 24, y: 12)
-    }
-
-    private var widgetGalleryCard: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Image(systemName: "drop.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Self.waterBlue)
-                Text("Sippy")
-                    .font(.system(size: 11, weight: .semibold))
-                Spacer()
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Color(white: 0.75))
-            }
-
-            Text("Aqua")
-                .font(.system(size: 17, weight: .bold))
-
-            Text("Track your hydration.\nTap Drink to log water.")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            // Widget preview tile
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Self.waterBlue)
-                .frame(width: 110, height: 110)
-                .overlay {
-                    VStack(alignment: .leading) {
-                        HStack(spacing: 2) {
-                            Text("Aqua")
-                                .font(.system(size: 9, weight: .medium))
-                            Text("水")
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.5))
-                        }
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Image(systemName: "drop.fill")
-                                .font(.system(size: 12))
-                                .padding(7)
-                                .background(Circle().fill(.white.opacity(0.25)))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(10)
-                }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.white)
-        )
     }
 }
 

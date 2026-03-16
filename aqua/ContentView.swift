@@ -12,6 +12,13 @@ private struct ButtonFrameKey: PreferenceKey {
     }
 }
 
+private struct HeaderFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
 struct WaveShape: Shape {
     var phase: Double
     var amplitude: CGFloat
@@ -65,6 +72,7 @@ struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
     @State private var wavePhase: Double = 0
     @State private var buttonFrame: CGRect = .zero
+    @State private var headerFrame: CGRect = .zero
     @State private var sloshAmplitude: CGFloat = 0
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
     @State private var showWelcome = false
@@ -93,7 +101,15 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    stickyHeader
+                    stickyHeader(onWater: headerFrame != .zero && waterSurfaceY < headerFrame.maxY)
+                        .background(
+                            GeometryReader { headerGeo in
+                                Color.clear.preference(
+                                    key: HeaderFrameKey.self,
+                                    value: headerGeo.frame(in: .named("root"))
+                                )
+                            }
+                        )
                     hydrationVisual
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     logWaterButton
@@ -118,6 +134,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
         .onPreferenceChange(ButtonFrameKey.self) { buttonFrame = $0 }
+        .onPreferenceChange(HeaderFrameKey.self) { headerFrame = $0 }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 viewModel.refreshFromStorage()
@@ -141,21 +158,19 @@ struct ContentView: View {
         }
     }
 
-    private var headerOnWater: Bool { viewModel.hydrationLevel > 0.78 }
-
-    private var stickyHeader: some View {
+    private func stickyHeader(onWater: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(viewModel.hydrationLevel > 0 ? "Aqua" : "Sip")
                 .font(.custom("Inter-Medium", size: 22))
-                .foregroundStyle(headerOnWater ? .white : Color(white: 0.1))
+                .foregroundStyle(onWater ? .white : Color(white: 0.1))
             Text(viewModel.hydrationLevel > 0 ? "水" : "飲")
                 .font(.title2)
                 .fontWeight(.medium)
-                .foregroundStyle(headerOnWater ? Color.white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+                .foregroundStyle(onWater ? Color.white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
-        .animation(.easeInOut(duration: 0.3), value: headerOnWater)
+        .animation(.easeInOut(duration: 0.3), value: onWater)
     }
 
     private func waterFillView(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
