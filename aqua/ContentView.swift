@@ -215,11 +215,11 @@ struct ContentView: View {
     private var lastLogText: some View {
         Group {
             if let date = SharedStorage.lastWaterLogTime {
-                Text("Last drank: \(Self.formatLastDrank(date))")
+                Text("Last sip: \(Self.formatLastDrank(date))")
                     .font(.subheadline)
                     .foregroundStyle(bottomTextOnWater ? Color.white.opacity(0.5) : Color.gray.opacity(0.6))
             } else {
-                Text("Last drank: —")
+                Text("Last sip: —")
                     .font(.subheadline)
                     .foregroundStyle(bottomTextOnWater ? Color.white.opacity(0.5) : Color.gray.opacity(0.4))
             }

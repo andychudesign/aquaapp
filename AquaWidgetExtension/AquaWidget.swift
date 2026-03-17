@@ -7,7 +7,7 @@ import AppIntents
 import WidgetKit
 import SwiftUI
 
-private let appGroupID = "group.andychudesign.aqua"
+private let appGroupID = "group.andychudesign.Aqua"
 private let hydrationDuration: TimeInterval = 7200
 private let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
 private let dehydratedBg = Color(red: 0.98, green: 0.96, blue: 0.92)
@@ -65,12 +65,27 @@ struct AquaTimelineProvider: TimelineProvider {
 
         var entries: [AquaWidgetEntry] = []
 
+        // Fill phase: ramp from 0 → 1 over 2 seconds so water visibly rises
+        let fillDuration: TimeInterval = 2.0
+        let fillStep: TimeInterval = 0.3
+        if elapsed < fillDuration {
+            var ft = elapsed
+            while ft < fillDuration {
+                let d = logTime.addingTimeInterval(ft)
+                if d >= now {
+                    let fillLevel = min(1.0, ft / fillDuration)
+                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: fillLevel))
+                }
+                ft += fillStep
+            }
+        }
+
         // Drain phase: update every 5 minutes over the 2-hour window
         let drainStep: TimeInterval = 300
-        var t = elapsed
+        var t = max(elapsed, fillDuration)
         while t < hydrationDuration {
             let d = logTime.addingTimeInterval(t)
-            if d >= now {
+            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 1 }) ?? true {
                 entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
             }
             t += drainStep

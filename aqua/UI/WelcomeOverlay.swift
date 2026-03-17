@@ -32,14 +32,15 @@ private struct WelcomeWaveShape: Shape {
 
 private struct ProgressBar: View {
     var progress: Double
+    var onWater: Bool
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color(white: 0.82))
+                    .fill(onWater ? Color.white.opacity(0.35) : Color(white: 0.82))
                 Capsule()
-                    .fill(Color(white: 0.15))
+                    .fill(onWater ? Color.white : Color(white: 0.15))
                     .frame(width: max(6, geo.size.width * progress))
             }
         }
@@ -54,11 +55,13 @@ struct WelcomeView: View {
 
     @State private var phase = 0
     @State private var progress: Double = 0.03
-    @State private var waterFilled = false
+    @State private var waterFraction: CGFloat = 0
     @State private var descriptionsVisible = false
 
     private static let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
     private static let warmBg = Color(red: 0.98, green: 0.96, blue: 0.92)
+
+    private var onWater: Bool { phase >= 2 }
 
     var body: some View {
         GeometryReader { geo in
@@ -68,28 +71,101 @@ struct WelcomeView: View {
                 // Water background layer
                 ZStack(alignment: .top) {
                     Self.waterBlue
-                    WelcomeWaveShape()
-                        .fill(Self.warmBg)
-                        .frame(height: 14)
+                    if waterFraction < 1 {
+                        WelcomeWaveShape()
+                            .fill(Self.warmBg)
+                            .frame(height: 14)
+                    }
                 }
-                .frame(height: waterFilled ? geo.size.height * 0.55 : 0)
+                .frame(height: geo.size.height * waterFraction)
                 .clipped()
 
                 // Foreground content
                 VStack(spacing: 0) {
-                    ProgressBar(progress: progress)
+                    ProgressBar(progress: progress, onWater: onWater)
                         .padding(.top, 78)
+                        .animation(.easeInOut(duration: 0.8), value: onWater)
 
+                    // Header at fixed position from top
+                    Spacer().frame(height: geo.size.height * 0.06)
+
+                    headerText(onWater: onWater)
+                        .offset(y: phase >= 1 ? 0 : geo.size.height * 0.3)
+                        .animation(.easeInOut(duration: 0.8), value: onWater)
+
+                    // Middle content — both always in layout, toggled with opacity
                     ZStack {
-                        if phase < 2 {
-                            waterPhaseContent(geo: geo)
-                                .transition(.opacity)
-                        } else {
-                            widgetPhaseContent(geo: geo)
-                                .transition(.opacity)
+                        // Phase 0 & 1: descriptions
+                        VStack(spacing: 16) {
+                            Text("Sipping aqua every 2 hours to stay hydrated")
+                                .font(.subheadline)
+                                .foregroundStyle(Color(white: 0.5))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+
+                            Text("每兩個鐘,見字飲水")
+                                .font(.subheadline)
+                                .foregroundStyle(Color(white: 0.5))
                         }
+                        .padding(.top, 20)
+                        .opacity(descriptionsVisible && phase < 2 ? 1 : 0)
+
+                        // Phase 2: widget content
+                        VStack(spacing: 0) {
+                            Spacer()
+
+                            VStack(spacing: 8) {
+                                Text("Use the widget, so you won't get dried out ;)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.7))
+
+                                Text("用widget,隨時睇住")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+
+                            Spacer()
+
+                            Image("WidgetScreenshot")
+                                .resizable()
+                                .scaledToFit()
+                                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                                .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+                                .padding(.horizontal, 24)
+                                .frame(maxHeight: geo.size.height * 0.45)
+                                .offset(y: -20)
+                        }
+                        .opacity(phase >= 2 ? 1 : 0)
                     }
                     .frame(maxHeight: .infinity)
+
+                    // Persistent button
+                    Button {
+                        if phase < 2 {
+                            withAnimation(.easeInOut(duration: 1.2)) {
+                                waterFraction = 1.0
+                                progress = 1.0
+                                phase = 2
+                            }
+                        } else {
+                            onComplete()
+                        }
+                    } label: {
+                        Text(onWater ? "Start Sipping" : "Continue")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 48)
+                            .padding(.vertical, 14)
+                            .background(
+                                Capsule().fill(onWater ? Color.white.opacity(0.25) : Self.waterBlue)
+                            )
+                            .animation(.easeInOut(duration: 0.8), value: onWater)
+                    }
+                    .opacity(descriptionsVisible ? 1 : 0)
+
+                    Spacer().frame(height: 50)
                 }
             }
         }
@@ -98,7 +174,7 @@ struct WelcomeView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 withAnimation(.easeInOut(duration: 1.8)) {
                     phase = 1
-                    waterFilled = true
+                    waterFraction = 0.13
                     progress = 0.5
                 }
                 withAnimation(.easeIn(duration: 0.6).delay(1.4)) {
@@ -108,101 +184,13 @@ struct WelcomeView: View {
         }
     }
 
-    // MARK: Phase 0 & 1 — Water fill
-
-    private func waterPhaseContent(geo: GeometryProxy) -> some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            headerText
-                .offset(y: phase >= 1 ? -geo.size.height * 0.15 : geo.size.height * 0.05)
-
-            if descriptionsVisible {
-                VStack(spacing: 64) {
-                    Text("Sipping aqua every 2 hours to stay hydrated")
-                        .font(.subheadline)
-                        .foregroundStyle(Color(white: 0.5))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-
-                    Text("每兩個鐘,見字飲水")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-                .offset(y: -50)
-            }
-
-            Spacer()
-
-            if descriptionsVisible {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.8)) {
-                        waterFilled = false
-                        progress = 1.0
-                    }
-                    withAnimation(.easeInOut(duration: 0.6).delay(0.3)) {
-                        phase = 2
-                    }
-                } label: {
-                    Text("Next")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.horizontal, 48)
-                        .padding(.vertical, 14)
-                        .background(Capsule().fill(.white.opacity(0.25)))
-                }
-
-                Spacer().frame(height: 50)
-            }
-        }
-    }
-
-    // MARK: Phase 2 — Widget
-
-    private func widgetPhaseContent(geo: GeometryProxy) -> some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: geo.size.height * 0.06)
-
-            headerText
-
-            Spacer().frame(height: 12)
-
-            Text("Don't be silly, use the widget ;)")
-                .font(.subheadline)
-                .foregroundStyle(Color(white: 0.55))
-                .multilineTextAlignment(.center)
-
-            Spacer().frame(height: 20)
-
-            Image("WidgetScreenshot")
-                .resizable()
-                .scaledToFit()
-                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
-                .padding(.horizontal, 32)
-
-            Spacer().frame(height: 24)
-
-            Button(action: onComplete) {
-                Text("Get Started")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: 220)
-                    .padding(.vertical, 14)
-                    .background(Capsule().fill(Self.waterBlue))
-            }
-
-            Spacer().frame(height: 50)
-        }
-    }
-
     // MARK: Shared header
 
-    private var headerText: some View {
+    private func headerText(onWater: Bool) -> some View {
         HStack(spacing: 6) {
             Text("Sip")
                 .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(Color(white: 0.1))
+                .foregroundStyle(onWater ? .white : Color(white: 0.1))
             Text("飲")
                 .font(.system(size: 24, weight: .medium))
                 .foregroundStyle(Color(red: 0, green: 0.208, blue: 0.925))

@@ -8,7 +8,7 @@ import WidgetKit
 
 /// App Group identifier shared between the main app and the widget.
 enum SharedStorage {
-    static let appGroupID = "group.andychudesign.aqua"
+    static let appGroupID = "group.andychudesign.Aqua"
 
     private static var suite: UserDefaults? {
         UserDefaults(suiteName: appGroupID)
