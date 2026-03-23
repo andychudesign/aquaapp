@@ -18,7 +18,16 @@ struct LogWaterIntent: AppIntent {
     static let title: LocalizedStringResource = "I drank water"
 
     func perform() async throws -> some IntentResult {
-        UserDefaults(suiteName: appGroupID)?.set(Date(), forKey: "lastWaterLogTime")
+        let suite = UserDefaults(suiteName: appGroupID)
+        let previousLevel: Double
+        if let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date {
+            let elapsed = Date().timeIntervalSince(logTime)
+            previousLevel = max(0, min(1, 1 - elapsed / hydrationDuration))
+        } else {
+            previousLevel = 0
+        }
+        suite?.set(previousLevel, forKey: "fillStartLevel")
+        suite?.set(Date(), forKey: "lastWaterLogTime")
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
         return .result()
     }
@@ -65,7 +74,9 @@ struct AquaTimelineProvider: TimelineProvider {
 
         var entries: [AquaWidgetEntry] = []
 
-        // Fill phase: ramp from 0 → 1 over 2 seconds so water visibly rises
+        let fillStartLevel = suite?.double(forKey: "fillStartLevel") ?? 0
+
+        // Fill phase: ramp from previous level → 1 over 2 seconds so water visibly rises
         let fillDuration: TimeInterval = 2.0
         let fillStep: TimeInterval = 0.3
         if elapsed < fillDuration {
@@ -73,7 +84,8 @@ struct AquaTimelineProvider: TimelineProvider {
             while ft < fillDuration {
                 let d = logTime.addingTimeInterval(ft)
                 if d >= now {
-                    let fillLevel = min(1.0, ft / fillDuration)
+                    let progress = min(1.0, ft / fillDuration)
+                    let fillLevel = fillStartLevel + (1.0 - fillStartLevel) * progress
                     entries.append(AquaWidgetEntry(date: d, hydrationLevel: fillLevel))
                 }
                 ft += fillStep
@@ -147,10 +159,12 @@ struct WidgetWaveShape: Shape {
 struct AquaWidgetView: View {
     var entry: AquaWidgetEntry
     @Environment(\.widgetFamily) var family
+    @Environment(\.widgetRenderingMode) var renderingMode
 
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
     private var headerOnWater: Bool { entry.hydrationLevel > 0.75 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
+    private var isTinted: Bool { renderingMode == .accented }
 
     var body: some View {
         switch family {
@@ -169,10 +183,18 @@ struct AquaWidgetView: View {
             HStack(spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(headerOnWater ? .white : Color(white: 0.15))
+                    .foregroundStyle(
+                        headerOnWater
+                            ? (isTinted ? Color(white: 0.1) : Color.white)
+                            : (isTinted ? Color.primary : Color(white: 0.15))
+                    )
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(headerOnWater ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    .foregroundStyle(
+                        headerOnWater
+                            ? (isTinted ? Color(white: 0.1, opacity: 0.5) : Color(white: 1, opacity: 0.5))
+                            : (isTinted ? Color.secondary : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    )
             }
             .contentTransition(.interpolate)
 
@@ -193,10 +215,18 @@ struct AquaWidgetView: View {
             HStack(spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(headerOnWater ? .white : Color(white: 0.15))
+                    .foregroundStyle(
+                        headerOnWater
+                            ? (isTinted ? Color(white: 0.1) : Color.white)
+                            : (isTinted ? Color.primary : Color(white: 0.15))
+                    )
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(headerOnWater ? .white.opacity(0.5) : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    .foregroundStyle(
+                        headerOnWater
+                            ? (isTinted ? Color(white: 0.1, opacity: 0.5) : Color(white: 1, opacity: 0.5))
+                            : (isTinted ? Color.secondary : Color(red: 0.35, green: 0.55, blue: 0.85))
+                    )
             }
             .contentTransition(.interpolate)
 
@@ -245,10 +275,18 @@ struct AquaWidgetView: View {
         Button(intent: LogWaterIntent()) {
             Image(systemName: "drop.fill")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(buttonOnWater ? .white : waterBlue)
+                .foregroundStyle(
+                    buttonOnWater
+                        ? (isTinted ? Color(white: 0.1) : Color.white)
+                        : (isTinted ? Color.primary : waterBlue)
+                )
                 .padding(10)
                 .background(
-                    Circle().fill(buttonOnWater ? Color.white.opacity(0.25) : waterBlue.opacity(0.15))
+                    Circle().fill(
+                        buttonOnWater
+                            ? (isTinted ? Color(white: 0.1).opacity(0.25) : Color.white.opacity(0.25))
+                            : (isTinted ? Color.primary.opacity(0.15) : waterBlue.opacity(0.15))
+                    )
                 )
         }
         .buttonStyle(.plain)
@@ -265,6 +303,7 @@ struct AquaWidgetView: View {
 
             ZStack(alignment: .bottom) {
                 dehydratedBg
+                    .widgetAccentable()
 
                 WidgetWaveShape(phase: wavePhase)
                     .fill(waterBlue)
@@ -286,6 +325,7 @@ struct AquaWidget: Widget {
         .configurationDisplayName("Aqua")
         .description("Track your hydration. Tap Drink to log water.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
+        .containerBackgroundRemovable(false)
     }
 }
 

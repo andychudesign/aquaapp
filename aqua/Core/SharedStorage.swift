@@ -37,6 +37,7 @@ enum SharedStorage {
 
     /// Record that the user just drank water.
     static func logWater() {
+        suite?.set(hydrationLevel(), forKey: "fillStartLevel")
         lastWaterLogTime = Date()
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
     }

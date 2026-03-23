@@ -26,12 +26,11 @@ struct WaveShape: Shape {
     var bumpHeight: CGFloat
     var bumpWidth: CGFloat
 
-    var animatableData: AnimatablePair<Double, AnimatablePair<CGFloat, CGFloat>> {
-        get { AnimatablePair(phase, AnimatablePair(amplitude, bumpHeight)) }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(amplitude, bumpHeight) }
         set {
-            phase = newValue.first
-            amplitude = newValue.second.first
-            bumpHeight = newValue.second.second
+            amplitude = newValue.first
+            bumpHeight = newValue.second
         }
     }
 
@@ -70,7 +69,6 @@ struct WaveShape: Shape {
 
 struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
-    @State private var wavePhase: Double = 0
     @State private var buttonFrame: CGRect = .zero
     @State private var headerFrame: CGRect = .zero
     @State private var sloshAmplitude: CGFloat = 0
@@ -181,22 +179,21 @@ struct ContentView: View {
 
         return VStack(spacing: 0) {
             Spacer(minLength: 0)
-            WaveShape(
-                phase: wavePhase,
-                amplitude: waveAmplitude,
-                frequency: 1.5,
-                bumpHeight: bumpHeight,
-                bumpWidth: 0.18
-            )
-            .fill(Self.waterBlue)
+            TimelineView(.animation(paused: viewModel.hydrationLevel <= 0)) { timeline in
+                let wavePhase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 4) / 4
+                WaveShape(
+                    phase: wavePhase,
+                    amplitude: waveAmplitude,
+                    frequency: 1.5,
+                    bumpHeight: bumpHeight,
+                    bumpWidth: 0.18
+                )
+                .fill(Self.waterBlue)
+            }
             .frame(height: max(0, totalHeight))
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
-        .onAppear {
-            withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
-                wavePhase = 1
-            }
-        }
     }
 
     /// Interpolates between dehydrated and hydrated visuals over the 5s transition.
@@ -210,7 +207,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.15), value: viewModel.hydrationLevel)
     }
 
-    private var bottomTextOnWater: Bool { viewModel.hydrationLevel > 0.08 }
+    private var bottomTextOnWater: Bool { viewModel.hydrationLevel > 0 }
 
     private var lastLogText: some View {
         Group {
