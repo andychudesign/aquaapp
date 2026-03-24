@@ -15,7 +15,7 @@ The app name toggles contextually: **"Aqua"** (水) when hydrated, **"Sip"** (�
 - **Persistence:** `UserDefaults` via App Group (`group.andychudesign.Aqua`), shared between the main app and the widget extension
 - **Widget:** WidgetKit extension (`AquaWidgetExtension`) supporting `.systemSmall`, `.systemMedium`, `.accessoryCircular`, `.accessoryRectangular` with a `LogWaterIntent` (App Intents)
 - **Font:** Inter-Medium (custom)
-- **Dependencies:** None — pure Apple frameworks (SwiftUI, Foundation, WidgetKit, AppIntents)
+- **Dependencies:** None — pure Apple frameworks (SwiftUI, Foundation, WidgetKit, AppIntents, HealthKit)
 
 ## Core Logic
 
@@ -56,3 +56,16 @@ The app name toggles contextually: **"Aqua"** (水) when hydrated, **"Sip"** (�
 - **Bug:** In Home Screen Tinted mode, the water fill was invisible — the widget showed a flat tinted background with no water.
 - **Cause:** The system removes `containerBackground` content by default in tinted mode, discarding the water fill entirely.
 - **Fix:** Added `.containerBackgroundRemovable(false)` to the widget configuration so the custom background persists. Marked `dehydratedBg` with `.widgetAccentable()` so the system renders the background with the tint color (darker) while the water stays in the non-accented group (lighter). Also added `@Environment(\.widgetRenderingMode)` detection with conditional text/button colors that swap to dark when on water in tinted mode.
+
+## V1.1 Features
+
+### Apple HealthKit Integration
+- **What:** Each sip saves a 100 mL `dietaryWater` sample to Apple Health, from both the main app and the widget.
+- **Flow:** First sip in the main app triggers the system HealthKit authorization sheet (write-only for Water). Once authorized, all subsequent sips — including widget taps — write silently. Failures are non-blocking and never prevent a sip from being logged.
+- **Implementation:** `HealthKitManager` — a `@MainActor` enum with `saveSip()` (saves 100 mL sample) and `requestAuthorizationIfNeeded()` (no-ops if already determined). Called from `WaterStateViewModel.logWater()` (app) and `LogWaterIntent.perform()` (widget).
+- **Files changed:**
+  - `Core/HealthKitManager.swift` — new, shared target membership (app + widget)
+  - `Core/WaterStateViewModel.swift` — added `Task { await HealthKitManager.saveSip() }` in `logWater()`
+  - `AquaWidgetExtension/AquaWidget.swift` — added `await HealthKitManager.saveSip()` in `LogWaterIntent.perform()`
+  - `aqua.entitlements` + `AquaWidgetExtension.entitlements` — added `com.apple.developer.healthkit` keys
+  - Xcode: HealthKit capability enabled on both targets, usage descriptions set in build settings

@@ -34,6 +34,8 @@ final class WaterStateViewModel {
         SharedStorage.logWater()
         hydrationLevel = 1.0
         startRefreshTimerIfNeeded()
+
+        Task { await HealthKitManager.saveSip() }
     }
 
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.

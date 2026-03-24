@@ -4,6 +4,7 @@
 //
 
 import AppIntents
+import HealthKit
 import WidgetKit
 import SwiftUI
 
@@ -29,6 +30,7 @@ struct LogWaterIntent: AppIntent {
         suite?.set(previousLevel, forKey: "fillStartLevel")
         suite?.set(Date(), forKey: "lastWaterLogTime")
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+        await HealthKitManager.saveSip()
         return .result()
     }
 }

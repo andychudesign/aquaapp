@@ -55,9 +55,22 @@
 		8A8439102F636F38001338D3 /* AquaWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AquaWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		8A5508A82F721500003D9A04 /* Exceptions for "aqua" folder in "AquaWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Core/HealthKitManager.swift,
+			);
+			target = 8A8439122F636F38001338D3 /* AquaWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8A8438E42F636F35001338D3 /* aqua */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				8A5508A82F721500003D9A04 /* Exceptions for "aqua" folder in "AquaWidgetExtension" target */,
+			);
 			path = aqua;
 			sourceTree = "<group>";
 		};
@@ -489,6 +502,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sip;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sip reads your water intake data to stay in sync with Health.\n";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Each sip is about 100 ml. Sip logs your water intake to Apple Health so your hydration stays up to date.\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -524,6 +539,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sip;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sip reads your water intake data to stay in sync with Health.\n";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Each sip is about 100 ml. Sip logs your water intake to Apple Health so your hydration stays up to date.\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -635,6 +652,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "AquaWidgetExtension-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Aqua;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sip reads your water intake data to stay in sync with Health.\n";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -661,6 +679,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "AquaWidgetExtension-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Aqua;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sip reads your water intake data to stay in sync with Health.\n";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
