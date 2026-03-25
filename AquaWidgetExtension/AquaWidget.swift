@@ -30,7 +30,10 @@ struct LogWaterIntent: AppIntent {
         suite?.set(previousLevel, forKey: "fillStartLevel")
         suite?.set(Date(), forKey: "lastWaterLogTime")
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
-        await HealthKitManager.saveSip()
+        let saved = await HealthKitManager.saveSip(requestAuth: false)
+        if saved {
+            suite?.set(true, forKey: "healthKitAuthResolved")
+        }
         return .result()
     }
 }
@@ -40,24 +43,27 @@ struct LogWaterIntent: AppIntent {
 struct AquaWidgetEntry: TimelineEntry {
     let date: Date
     let hydrationLevel: Double
+    let needsHealthKitAuth: Bool
 }
 
 struct AquaTimelineProvider: TimelineProvider {
     func placeholder(in context: Context) -> AquaWidgetEntry {
-        AquaWidgetEntry(date: Date(), hydrationLevel: 0)
+        AquaWidgetEntry(date: Date(), hydrationLevel: 0, needsHealthKitAuth: false)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (AquaWidgetEntry) -> Void) {
-        completion(AquaWidgetEntry(date: Date(), hydrationLevel: Self.hydrationLevel(at: Date())))
+        let authResolved = UserDefaults(suiteName: appGroupID)?.bool(forKey: "healthKitAuthResolved") ?? false
+        completion(AquaWidgetEntry(date: Date(), hydrationLevel: Self.hydrationLevel(at: Date()), needsHealthKitAuth: !authResolved))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AquaWidgetEntry>) -> Void) {
         let now = Date()
         let suite = UserDefaults(suiteName: appGroupID)
+        let needsAuth = !(suite?.bool(forKey: "healthKitAuthResolved") ?? false)
 
         guard let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date else {
             completion(Timeline(
-                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0)],
+                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0, needsHealthKitAuth: needsAuth)],
                 policy: .after(now.addingTimeInterval(60))
             ))
             return
@@ -68,7 +74,7 @@ struct AquaTimelineProvider: TimelineProvider {
 
         guard elapsed < hydrationDuration else {
             completion(Timeline(
-                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0)],
+                entries: [AquaWidgetEntry(date: now, hydrationLevel: 0, needsHealthKitAuth: needsAuth)],
                 policy: .after(now.addingTimeInterval(60))
             ))
             return
@@ -88,7 +94,7 @@ struct AquaTimelineProvider: TimelineProvider {
                 if d >= now {
                     let progress = min(1.0, ft / fillDuration)
                     let fillLevel = fillStartLevel + (1.0 - fillStartLevel) * progress
-                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: fillLevel))
+                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: fillLevel, needsHealthKitAuth: needsAuth))
                 }
                 ft += fillStep
             }
@@ -100,17 +106,17 @@ struct AquaTimelineProvider: TimelineProvider {
         while t < hydrationDuration {
             let d = logTime.addingTimeInterval(t)
             if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 1 }) ?? true {
-                entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d)))
+                entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d), needsHealthKitAuth: needsAuth))
             }
             t += drainStep
         }
 
         if entries.last?.hydrationLevel != 0 {
-            entries.append(AquaWidgetEntry(date: endTime, hydrationLevel: 0))
+            entries.append(AquaWidgetEntry(date: endTime, hydrationLevel: 0, needsHealthKitAuth: needsAuth))
         }
 
         if entries.isEmpty {
-            entries.append(AquaWidgetEntry(date: now, hydrationLevel: Self.hydrationLevel(at: now)))
+            entries.append(AquaWidgetEntry(date: now, hydrationLevel: Self.hydrationLevel(at: now), needsHealthKitAuth: needsAuth))
         }
 
         completion(Timeline(entries: entries, policy: .after(endTime)))
@@ -245,11 +251,23 @@ struct AquaWidgetView: View {
     // MARK: Accessory
 
     private var circularView: some View {
-        Button(intent: LogWaterIntent()) {
-            ZStack {
-                AccessoryWidgetBackground()
-                Image(systemName: "drop.fill")
-                    .font(.title)
+        Group {
+            if entry.needsHealthKitAuth {
+                Button(intent: LogWaterAuthIntent()) {
+                    ZStack {
+                        AccessoryWidgetBackground()
+                        Image(systemName: "drop.fill")
+                            .font(.title)
+                    }
+                }
+            } else {
+                Button(intent: LogWaterIntent()) {
+                    ZStack {
+                        AccessoryWidgetBackground()
+                        Image(systemName: "drop.fill")
+                            .font(.title)
+                    }
+                }
             }
         }
         .buttonStyle(.plain)
@@ -263,9 +281,18 @@ struct AquaWidgetView: View {
                 Text(isHydrated ? "Hydrated" : "Dehydrated")
                     .font(.caption.weight(.semibold))
             }
-            Button(intent: LogWaterIntent()) {
-                Text("Drink")
-                    .font(.caption2.weight(.medium))
+            Group {
+                if entry.needsHealthKitAuth {
+                    Button(intent: LogWaterAuthIntent()) {
+                        Text("Drink")
+                            .font(.caption2.weight(.medium))
+                    }
+                } else {
+                    Button(intent: LogWaterIntent()) {
+                        Text("Drink")
+                            .font(.caption2.weight(.medium))
+                    }
+                }
             }
             .buttonStyle(.plain)
         }
@@ -273,23 +300,32 @@ struct AquaWidgetView: View {
 
     // MARK: Drink button
 
-    private var drinkButton: some View {
-        Button(intent: LogWaterIntent()) {
-            Image(systemName: "drop.fill")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(
+    private var drinkButtonLabel: some View {
+        Image(systemName: "drop.fill")
+            .font(.system(size: 20, weight: .medium))
+            .foregroundStyle(
+                buttonOnWater
+                    ? (isTinted ? Color(white: 0.1) : Color.white)
+                    : (isTinted ? Color.primary : waterBlue)
+            )
+            .padding(10)
+            .background(
+                Circle().fill(
                     buttonOnWater
-                        ? (isTinted ? Color(white: 0.1) : Color.white)
-                        : (isTinted ? Color.primary : waterBlue)
+                        ? (isTinted ? Color(white: 0.1).opacity(0.25) : Color.white.opacity(0.25))
+                        : (isTinted ? Color.primary.opacity(0.15) : waterBlue.opacity(0.15))
                 )
-                .padding(10)
-                .background(
-                    Circle().fill(
-                        buttonOnWater
-                            ? (isTinted ? Color(white: 0.1).opacity(0.25) : Color.white.opacity(0.25))
-                            : (isTinted ? Color.primary.opacity(0.15) : waterBlue.opacity(0.15))
-                    )
-                )
+            )
+    }
+
+    @ViewBuilder
+    private var drinkButton: some View {
+        Group {
+            if entry.needsHealthKitAuth {
+                Button(intent: LogWaterAuthIntent()) { drinkButtonLabel }
+            } else {
+                Button(intent: LogWaterIntent()) { drinkButtonLabel }
+            }
         }
         .buttonStyle(.plain)
         .contentTransition(.interpolate)
@@ -334,7 +370,7 @@ struct AquaWidget: Widget {
 #Preview(as: .systemSmall) {
     AquaWidget()
 } timeline: {
-    AquaWidgetEntry(date: Date(), hydrationLevel: 0)
-    AquaWidgetEntry(date: Date(), hydrationLevel: 0.5)
-    AquaWidgetEntry(date: Date(), hydrationLevel: 1)
+    AquaWidgetEntry(date: Date(), hydrationLevel: 0, needsHealthKitAuth: false)
+    AquaWidgetEntry(date: Date(), hydrationLevel: 0.5, needsHealthKitAuth: false)
+    AquaWidgetEntry(date: Date(), hydrationLevel: 1, needsHealthKitAuth: false)
 }

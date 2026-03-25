@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import WidgetKit
 
 @Observable
 final class WaterStateViewModel {
@@ -35,7 +36,14 @@ final class WaterStateViewModel {
         hydrationLevel = 1.0
         startRefreshTimerIfNeeded()
 
-        Task { await HealthKitManager.saveSip() }
+        Task {
+            let saved = await HealthKitManager.saveSip()
+            if saved {
+                let suite = UserDefaults(suiteName: SharedStorage.appGroupID)
+                suite?.set(true, forKey: "healthKitAuthResolved")
+                WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+            }
+        }
     }
 
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.

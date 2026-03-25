@@ -5,11 +5,10 @@
 
 import HealthKit
 
-@MainActor
 enum HealthKitManager {
     private static let store = HKHealthStore()
     private static let waterType = HKQuantityType(.dietaryWater)
-    private static let sipVolume = HKQuantity(unit: .literUnit(with: .milli), doubleValue: 100)
+    private static let sipVolume = HKQuantity(unit: .literUnit(with: .milli), doubleValue: 70)
 
     static var isAvailable: Bool {
         HKHealthStore.isHealthDataAvailable()
@@ -27,22 +26,31 @@ enum HealthKitManager {
         }
     }
 
-    /// Saves a single sip (100 mL) to HealthKit.
-    /// Requests authorization on first call, then writes silently.
-    static func saveSip() async {
-        guard await requestAuthorizationIfNeeded() else { return }
+    /// Saves a single sip (70 mL) to HealthKit.
+    /// - Parameter requestAuth: `true` (default) triggers the system authorization
+    ///   sheet on first call — use from the main app. Pass `false` from widget
+    ///   extensions that cannot present UI; relies on authorization already granted
+    ///   in the main app.
+    @discardableResult
+    static func saveSip(requestAuth: Bool = true) async -> Bool {
+        guard isAvailable else { return false }
+        if requestAuth {
+            _ = await requestAuthorizationIfNeeded()
+        }
 
+        let now = Date()
         let sample = HKQuantitySample(
             type: waterType,
             quantity: sipVolume,
-            start: Date(),
-            end: Date()
+            start: now,
+            end: now
         )
 
         do {
             try await store.save(sample)
+            return true
         } catch {
-            // Non-critical — don't block the UI for a HealthKit failure
+            return false
         }
     }
 }
