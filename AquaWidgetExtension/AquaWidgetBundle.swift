@@ -9,6 +9,7 @@ import SwiftUI
 @main
 struct AquaWidgetBundle: WidgetBundle {
     var body: some Widget {
-        AquaWidget()
+        SipHomeWidget()
+        SipStatusWidget()
     }
 }

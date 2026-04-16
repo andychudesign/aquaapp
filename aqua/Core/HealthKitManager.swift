@@ -8,7 +8,12 @@ import HealthKit
 enum HealthKitManager {
     private static let store = HKHealthStore()
     private static let waterType = HKQuantityType(.dietaryWater)
-    private static let sipVolume = HKQuantity(unit: .literUnit(with: .milli), doubleValue: 70)
+    private static var sipVolume: HKQuantity {
+        let suite = UserDefaults(suiteName: "group.andychudesign.Aqua")
+        let stored = suite?.integer(forKey: "sipVolumeML") ?? 0
+        let ml = stored > 0 ? stored : 70
+        return HKQuantity(unit: .literUnit(with: .milli), doubleValue: Double(ml))
+    }
 
     static var isAvailable: Bool {
         HKHealthStore.isHealthDataAvailable()

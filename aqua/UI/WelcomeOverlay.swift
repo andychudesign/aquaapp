@@ -51,6 +51,7 @@ private struct ProgressBar: View {
 // MARK: - Full-screen welcome flow
 
 struct WelcomeView: View {
+    let theme: AppTheme
     var onComplete: () -> Void
 
     @State private var phase = 0
@@ -58,22 +59,18 @@ struct WelcomeView: View {
     @State private var waterFraction: CGFloat = 0
     @State private var descriptionsVisible = false
 
-    private static let waterBlue = Color(red: 0.2, green: 0.55, blue: 0.9)
-    private static let warmBg = Color(red: 0.98, green: 0.96, blue: 0.92)
-
     private var onWater: Bool { phase >= 2 }
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                Self.warmBg.ignoresSafeArea()
+                theme.dehydratedBackground.ignoresSafeArea()
 
-                // Water background layer
                 ZStack(alignment: .top) {
-                    Self.waterBlue
+                    theme.waterColor
                     if waterFraction < 1 {
                         WelcomeWaveShape()
-                            .fill(Self.warmBg)
+                            .fill(theme.dehydratedBackground)
                             .frame(height: 14)
                     }
                 }
@@ -159,7 +156,7 @@ struct WelcomeView: View {
                             .padding(.horizontal, 48)
                             .padding(.vertical, 14)
                             .background(
-                                Capsule().fill(onWater ? Color.white.opacity(0.25) : Self.waterBlue)
+                                Capsule().fill(onWater ? theme.buttonBackgroundOnWater : theme.waterColor)
                             )
                             .animation(.easeInOut(duration: 0.8), value: onWater)
                     }
@@ -190,14 +187,14 @@ struct WelcomeView: View {
         HStack(spacing: 6) {
             Text("Sip")
                 .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(onWater ? .white : Color(white: 0.1))
+                .foregroundStyle(onWater ? theme.headerPrimaryOnWater : theme.headerPrimary)
             Text("飲")
                 .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(Color(red: 0, green: 0.208, blue: 0.925))
+                .foregroundStyle(theme.welcomeAccent)
         }
     }
 }
 
 #Preview {
-    WelcomeView { }
+    WelcomeView(theme: .default) { }
 }

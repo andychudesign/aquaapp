@@ -31,10 +31,31 @@ struct LogWaterAuthIntent: AppIntent {
         suite?.set(previousLevel, forKey: "fillStartLevel")
         suite?.set(Date(), forKey: "lastWaterLogTime")
 
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        let today = f.string(from: Date())
+        let storedDate = suite?.string(forKey: "todaySipCountDate")
+        let isNewDay = storedDate != today
+        let currentCount = isNewDay ? 0 : (suite?.integer(forKey: "todaySipCount") ?? 0)
+        suite?.set(currentCount + 1, forKey: "todaySipCount")
+        suite?.set(today, forKey: "todaySipCountDate")
+
+        let storedVol = suite?.integer(forKey: "sipVolumeML") ?? 0
+        let sipML = storedVol > 0 ? storedVol : 70
+        let previousVolume: Int
+        if isNewDay {
+            previousVolume = 0
+        } else if let vol = suite?.object(forKey: "todayTotalVolumeML") as? Int {
+            previousVolume = vol
+        } else {
+            previousVolume = currentCount * 70
+        }
+        suite?.set(previousVolume + sipML, forKey: "todayTotalVolumeML")
+
         await HealthKitManager.saveSip(requestAuth: true)
         suite?.set(true, forKey: "healthKitAuthResolved")
 
-        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+        WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
 }

@@ -11,6 +11,24 @@ final class WaterStateViewModel {
     /// 0 = dehydrated, 1 = hydrated. Synced with SharedStorage for widget.
     private(set) var hydrationLevel: Double = 0
 
+    /// Today's total sip count.
+    private(set) var todaySipCount: Int = 0
+
+    /// Last 7 days of sip counts (oldest first).
+    private(set) var last7Days: [(date: String, count: Int)] = []
+
+    /// Average sips/day over the previous 6 days (excludes today).
+    private(set) var recentAverage: Double = 0
+
+    /// Active visual theme, synced from SharedStorage.
+    private(set) var theme: AppTheme = SharedStorage.currentTheme
+
+    /// Per-sip volume in mL (user-adjustable).
+    private(set) var sipVolumeML: Int = SharedStorage.sipVolumeML
+
+    /// Accumulated mL consumed today (actual per-sip volumes, not retroactive).
+    private(set) var todayVolumeML: Int = SharedStorage.todayTotalVolumeML
+
     private var refreshTimer: Timer?
 
     var isFullyDehydrated: Bool { hydrationLevel <= 0 }
@@ -18,6 +36,7 @@ final class WaterStateViewModel {
 
     init() {
         hydrationLevel = SharedStorage.hydrationLevel()
+        syncSipStats()
         startRefreshTimerIfNeeded()
     }
 
@@ -25,6 +44,8 @@ final class WaterStateViewModel {
     func refreshFromStorage() {
         let level = SharedStorage.hydrationLevel()
         hydrationLevel = level
+        syncSipStats()
+        theme = SharedStorage.currentTheme
         if level > 0 {
             startRefreshTimerIfNeeded()
         }
@@ -34,6 +55,7 @@ final class WaterStateViewModel {
     func logWater() {
         SharedStorage.logWater()
         hydrationLevel = 1.0
+        syncSipStats()
         startRefreshTimerIfNeeded()
 
         Task {
@@ -41,9 +63,17 @@ final class WaterStateViewModel {
             if saved {
                 let suite = UserDefaults(suiteName: SharedStorage.appGroupID)
                 suite?.set(true, forKey: "healthKitAuthResolved")
-                WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+                WidgetCenter.shared.reloadAllTimelines()
             }
         }
+    }
+
+    private func syncSipStats() {
+        todaySipCount = SharedStorage.todaySipCount
+        last7Days = SharedStorage.last7DaysSipCounts
+        recentAverage = SharedStorage.previous6DayAverage
+        sipVolumeML = SharedStorage.sipVolumeML
+        todayVolumeML = SharedStorage.todayTotalVolumeML
     }
 
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.
