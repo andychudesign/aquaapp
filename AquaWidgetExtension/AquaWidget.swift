@@ -321,6 +321,7 @@ struct AquaWidgetView: View {
             }
         }
         .gaugeStyle(.accessoryCircularCapacity)
+        .containerBackground(for: .widget) { }
     }
 
     private var rectangularView: some View {
@@ -342,6 +343,7 @@ struct AquaWidgetView: View {
             }
             .gaugeStyle(.accessoryLinearCapacity)
         }
+        .containerBackground(for: .widget) { }
     }
 
     // MARK: Drink button
