@@ -307,17 +307,15 @@ struct ContentView: View {
     // MARK: - Stats overlay
 
     private func statsOverlay(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        statsContent(
-            primary: theme.statsPrimary,
-            secondary: theme.statsSecondary
+        // The background water is blurred by 20px when stats are shown, so a
+        // single color pick (based on overall hydration level) reads cleanly
+        // without the dual-layer wave mask that caused gradient artefacts on
+        // small elements like "ml" and the info icon.
+        let onWater = viewModel.hydrationLevel > 0.5
+        return statsContent(
+            primary: onWater ? theme.statsPrimaryOnWater : theme.statsPrimary,
+            secondary: onWater ? theme.statsSecondaryOnWater : theme.statsSecondary
         )
-        .overlay {
-            statsContent(
-                primary: theme.statsPrimaryOnWater,
-                secondary: theme.statsSecondaryOnWater
-            )
-            .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight).blur(radius: 30))
-        }
         .padding(.horizontal, 32)
     }
 
@@ -374,7 +372,7 @@ struct ContentView: View {
 
                 RoundedRectangle(cornerRadius: 3)
                     .fill(isToday ? foreground : pastDayColor)
-                    .frame(width: isToday ? 10 : 8, height: barHeight)
+                    .frame(width: 8, height: barHeight)
             }
         }
         .frame(height: 40, alignment: .bottom)
