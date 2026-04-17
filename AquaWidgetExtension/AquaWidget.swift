@@ -408,8 +408,8 @@ struct SipHomeWidget: Widget {
         StaticConfiguration(kind: kind, provider: AquaTimelineProvider()) { entry in
             AquaWidgetView(entry: entry)
         }
-        .configurationDisplayName("Sip")
-        .description("Track your hydration and log a sip from your Home Screen.")
+        .configurationDisplayName("Hydration")
+        .description("Log your sip and stay hydrated.")
         .supportedFamilies([.systemSmall, .systemMedium])
         .containerBackgroundRemovable(false)
     }
