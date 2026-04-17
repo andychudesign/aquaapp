@@ -213,7 +213,7 @@ struct AquaWidgetView: View {
 
     private var theme: AppTheme { .forID(entry.themeID) }
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
-    private var headerOnWater: Bool { entry.hydrationLevel > 0.75 }
+    private var headerOnWater: Bool { entry.hydrationLevel > 0.88 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
     private var isTinted: Bool { renderingMode == .accented }
 
