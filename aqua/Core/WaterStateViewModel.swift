@@ -23,6 +23,9 @@ final class WaterStateViewModel {
     /// Active visual theme, synced from SharedStorage.
     private(set) var theme: AppTheme = SharedStorage.currentTheme
 
+    /// Theme IDs the user has unlocked (always includes `.default`).
+    private(set) var unlockedThemeIDs: Set<ThemeID> = SharedStorage.unlockedThemeIDs
+
     /// Per-sip volume in mL (user-adjustable).
     private(set) var sipVolumeML: Int = SharedStorage.sipVolumeML
 
@@ -46,6 +49,7 @@ final class WaterStateViewModel {
         hydrationLevel = level
         syncSipStats()
         theme = SharedStorage.currentTheme
+        unlockedThemeIDs = SharedStorage.unlockedThemeIDs
         if level > 0 {
             startRefreshTimerIfNeeded()
         }
@@ -66,6 +70,19 @@ final class WaterStateViewModel {
                 WidgetCenter.shared.reloadAllTimelines()
             }
         }
+    }
+
+    /// Apply a theme. Persists to shared storage and reloads widget timelines.
+    func applyTheme(_ id: ThemeID) {
+        SharedStorage.selectedThemeID = id
+        theme = SharedStorage.currentTheme
+    }
+
+    /// Mark a theme as unlocked. Future StoreKit purchase flow should call this
+    /// from a verified `Transaction` listener.
+    func unlockTheme(_ id: ThemeID) {
+        SharedStorage.unlock(id)
+        unlockedThemeIDs = SharedStorage.unlockedThemeIDs
     }
 
     private func syncSipStats() {

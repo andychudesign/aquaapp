@@ -1,223 +1,151 @@
 # Sip App Context
 
 ## Overview
-
-Sip is a minimal water-tracking iOS app. Tap a button, log a sip, and watch the screen fill with water that slowly drains over 2 hours — a gentle visual reminder to drink again. A companion Home/Lock Screen widget mirrors the hydration level and lets you log directly from the widget.
-
-The app name toggles contextually: **"Aqua"** (水) when hydrated, **"Sip"** (飲) when dehydrated. Bilingual English + Chinese copy throughout.
+Sip is a minimal water-tracking iOS app. Tap a button, log a sip, watch the screen fill with water that drains over 2 hours. A Home/Lock Screen widget mirrors hydration and lets you log directly. App name toggles: **"Aqua"** (水) when hydrated, **"Sip"** (飲) when dehydrated. Bilingual EN + 中文 throughout.
 
 ## Tech
-
 - **Platform:** iOS 26.2, iPhone & iPad
-- **Language:** Swift 5 with `@Observable`, async/await, App Intents
-- **UI:** SwiftUI only (no UIKit), fixed light color scheme
+- **Language:** Swift 5, `@Observable`, async/await, App Intents
+- **UI:** SwiftUI only, fixed light color scheme (theme-driven)
 - **Architecture:** MVVM — `WaterStateViewModel` (`@Observable`) drives `ContentView`
-- **Persistence:** `UserDefaults` via App Group (`group.andychudesign.Aqua`), shared between the main app and the widget extension
-- **Widget:** WidgetKit extension (`AquaWidgetExtension`) supporting `.systemSmall`, `.systemMedium`, `.accessoryCircular`, `.accessoryRectangular` with a `LogWaterIntent` (App Intents)
-- **Font:** Inter-Medium (custom)
-- **Dependencies:** None — pure Apple frameworks (SwiftUI, Foundation, WidgetKit, AppIntents, HealthKit)
+- **Persistence:** `UserDefaults` via App Group (`group.andychudesign.Aqua`), shared between app and widget
+- **Widget:** `AquaWidgetExtension` — `SipHomeWidget` (small/medium) + `SipStatusWidget` (circular/rectangular accessory)
+- **Fonts:** Inter-Medium app-wide (referenced via `Font.custom("Inter-Medium", ...)` — **not yet bundled**, silently falls back to system). Crimson Text Regular + SemiBold bundled in `aqua/Resources/Fonts/` and registered at launch via `CTFontManagerRegisterFontsForURL` (see `BundledFonts.registerAll()` in `aquaApp.swift`, called from `aquaApp.init()`), used for the Kurosawa theme name in the gallery preview.
+- **Frameworks:** SwiftUI, Foundation, WidgetKit, AppIntents, HealthKit, AVFoundation, CoreText
 
 ## Core Logic
+- **Single data point:** `lastWaterLogTime` (Date in shared App Group `UserDefaults`)
+- **Hydration formula:** `hydrationLevel = max(0, 1 - elapsed / 7200)` — linear decay 1.0 → 0.0 over 2 hours
+- **Log sip:** Sets `lastWaterLogTime` to now → hydration jumps to 1.0 → begins draining
+- **Refresh:** 1s timer in VM recalculates `hydrationLevel`; refreshes on `scenePhase == .active`
+- **Widget sync:** `WidgetCenter.shared.reloadAllTimelines()` after each log; provider pre-computes 5-minute drain entries
 
-- **Single data point:** `lastWaterLogTime` (a `Date` stored in the shared App Group `UserDefaults`)
-- **Hydration formula:** `hydrationLevel = max(0, 1 - elapsed / 7200)` — linear decay from 1.0 to 0.0 over 2 hours (7200 seconds)
-- **Log water:** Sets `lastWaterLogTime` to now → hydration jumps to 1.0 → begins draining
-- **Refresh:** 1-second timer in the view model continuously recalculates `hydrationLevel` while draining; also refreshes on `scenePhase == .active`
-- **Widget sync:** `WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")` fires after each log; timeline provider pre-computes entries at 5-minute intervals for the drain phase
+## Key Files
+- `Core/AppTheme.swift` — theme model (`.default` cream+blue, `.kurosawa` charcoal+stone); 19 color roles. `ThemeID: Identifiable` with `displayName` + bilingual `nameChinese` (e.g. "Kurosawa" / "黑澤")
+- `Core/SharedStorage.swift` — App Group `UserDefaults` wrapper; `lastWaterLogTime`, `fillStartLevel`, `selectedThemeID`, `currentTheme`, `unlockedThemeIDs` / `isUnlocked()` / `unlock()`, `sipVolumeML` (rw, default 70), `todayTotalVolumeML` accumulator, `todaySipCount`, `sipHistory` (7-day dict), `incrementSipCount()`, `last7DaysSipCounts`, `previous6DayAverage`
+- `Core/WaterStateViewModel.swift` — `@Observable` VM; `hydrationLevel`, `theme`, `unlockedThemeIDs`, `applyTheme(_:)`, `unlockTheme(_:)`, `todaySipCount`, `last7Days`, `recentAverage`, `todayVolumeML`, `sipVolumeML`, `logWater()`, `refreshFromStorage()`, `syncSipStats()`
+- `Core/HealthKitManager.swift` — `saveSip(requestAuth:)`; reads `sipVolumeML` from UserDefaults directly (not in widget target via SharedStorage)
+- `Core/SipIntents.swift` — `LogWaterAuthIntent` (`openAppWhenRun = true`, foreground HealthKit auth + sip)
+- `ContentView.swift` — main UI, stats overlay, `SipVolumeSheet`, dual-layer water-mask text rendering, sip sound (`AVAudioPlayer` from `sip.mp3`)
+- `UI/WelcomeOverlay.swift` — first-launch welcome (theme-aware)
+- `AquaWidgetExtension/AquaWidget.swift` — `SipHomeWidget` + `SipStatusWidget`, `AquaTimelineProvider`, `LogWaterIntent` (background), entry carries `themeID` + `sipCount` + `needsHealthKitAuth`
+- `AquaWidgetExtension/AquaWidgetBundle.swift` — registers both widgets
+- `aqua.entitlements` + `AquaWidgetExtension.entitlements` — App Group + HealthKit
 
-## V1 State
+## Current State (through V1.3)
 
-- **Single screen:** GeometryReader-based layout with a sticky header, centered drop button, and "Last sip" timestamp at the bottom
-- **Water fill:** `WaveShape` (dual sine waves + Gaussian bump under the button) fills from the bottom, height driven by `hydrationLevel`
-- **Animations:** Infinite 4s wave phase loop, 0.5s ease-in-out fill, interpolating spring slosh on tap
-- **Colors:** Water blue (`0.2, 0.55, 0.9`), warm dehydrated background (`0.98, 0.96, 0.92`)
-- **Welcome flow:** Three-phase overlay on first launch with progress bar, water fill demo, and widget screenshot — dismissed via `@AppStorage("hasSeenWelcome")`
-- **Placeholder views:** `DehydratedView` and `HydratedView` are currently `Color.clear`; visual difference is conveyed entirely through water fill level and header text
-- **No history / no daily goal / no notifications** — intentionally minimal for V1
+### Visual / UX
+- **Water fill:** `WaveShape` (dual sine waves + Gaussian bump under sip button); `TimelineView(.animation)` drives `wavePhase` from wall-clock time (immune to other animation transactions)
+- **Adaptive header text:** Dual-layer rendering — dark base + white overlay masked by `waterShapeMask` (same `WaveShape` aligned via GeometryReader in `"root"` coordinate space). Pixel-perfect color split tracking the wave every frame, like iOS home indicator
+- **Adaptive sip button:** White icon + `white.opacity(0.25)` bg on water; `waterBlue` icon + `waterBlue.opacity(0.15)` bg dehydrated
+- **Sip sound:** `AVAudioPlayer` static, pre-loaded `sip.mp3`, plays on tap (app only — widgets can't play audio)
+- **Welcome flow:** 3-phase overlay on first launch, gated by `@AppStorage("hasSeenWelcome")`
 
-## V1.1 Bug Fixes
+### Stats overlay
+- Tap sip count in header → centered overlay (sips today 48pt, total ml 40pt + info button, 7-day bar chart)
+- Today's bar: wider, `primary` color; past bars: thinner, `secondary` color; max 40px height; comparison label vs 7-day avg
+- Background `.blur(radius: 20).scaleEffect(1.1)` when open; header app name fades to opacity 0; close ✕ stays sharp
+- Stats text uses dual-layer water-mask, but mask is `.blur(radius: 30)` for soft gradient blend (prevents bar-chart filling artifact)
+- Sip count weight `.semibold`; on dehydrated bg uses `statsPrimary` (#888888), on water uses white
+- Toggle animation: `.spring(duration: 0.35, bounce: 0.15)`
 
-### 1. Wave animation freezing after logging a sip (App)
-- **Bug:** After tapping the sip button the water level rose but the wave animation stopped moving. Closing and reopening the app restored it.
-- **Cause:** `WaveShape.animatableData` bundled `phase` with `amplitude` and `bumpHeight`. The `withAnimation(.easeInOut(duration: 0.5))` wrapping `logWater()` re-animated the entire animatable pair, overriding the repeating `.linear(duration: 4)` wave phase loop. After 0.5 s, `phase` was stuck at 1.0 with no active animation.
-- **Fix:** Removed `phase` from `animatableData` (now only `amplitude` + `bumpHeight`). Replaced the `.onAppear` repeating animation with a `TimelineView(.animation(paused: hydrationLevel <= 0))` that computes `wavePhase` from wall-clock time each frame, making it immune to other animation transactions.
+### Adjustable sip volume (V1.3)
+- Info button in stats opens full-page sheet; `(−)/(+)` 10ml stepper, min 70ml, iOS 26 liquid glass close + blue save buttons
+- `todayTotalVolumeML` accumulates actual volume per sip — changing volume does NOT retroactively recalculate
+- Migration: pre-update sips assumed at 70ml
+- All 3 sip entry points accumulate volume: `SharedStorage.incrementSipCount()`, `LogWaterIntent.incrementSipCount(suite:)`, `LogWaterAuthIntent.perform()`
 
-### 2. Widget water drops to 0 before filling up (Widget)
-- **Bug:** Tapping the widget button while water was mid-drain (e.g. 0.5) caused the water to visually drop to 0 then ramp back to 1.
-- **Cause:** The timeline fill phase always ramped from `0 → 1` over 2 seconds, ignoring the current level.
-- **Fix:** Both `SharedStorage.logWater()` and `LogWaterIntent.perform()` now snapshot the current `hydrationLevel` into a `"fillStartLevel"` key in the shared App Group `UserDefaults` before setting the new log time. The timeline provider reads this value and ramps from `fillStartLevel → 1` instead of `0 → 1`.
+### HealthKit
+- Each sip writes a `dietaryWater` sample (volume from `sipVolumeML`)
+- First in-app sip triggers auth sheet; widget can't present UI
+- **Two-intent pattern:** `LogWaterAuthIntent` (`openAppWhenRun = true`) opens app for first auth → sets `"healthKitAuthResolved"` flag. After that, widget uses background `LogWaterIntent`. Widget view conditionally picks intent based on flag in entry's `needsHealthKitAuth`
+- Widget extension target needs `INFOPLIST_KEY_NSHealthUpdateUsageDescription` set in Debug + Release build settings
+- `HealthKitManager` is NOT `@MainActor` (HKHealthStore is thread-safe); widget calls `saveSip(requestAuth: false)`
 
-### 3. "Last sip" text unreadable at low water levels (App)
-- **Bug:** At low hydration levels the "Last sip" text switched to dark color while still sitting on the blue water (Gaussian bump keeps water visually high).
-- **Cause:** The `bottomTextOnWater` threshold was `hydrationLevel > 0.08`, but the bump pushes visible water well above the base height even at levels near 0.
-- **Fix:** Changed threshold to `hydrationLevel > 0` — text stays white as long as any water is on screen, matching the bump behaviour.
+### Widgets
+- **`SipHomeWidget`** (kind `"AquaWidget"`): small/medium, shows water fill + app name + sip count (top-right, 16pt bold rounded). Sip count uses same `headerColor` logic as app name (legible in tinted mode too)
+- **`SipStatusWidget`** (kind `"SipStatusWidget"`): circular uses `Gauge .accessoryCircularCapacity` + drop icon (or 飲 at 0%); rectangular uses `Gauge .accessoryLinearCapacity` + percent + label. Tap opens app (no log intent on lock screen)
+- Tinted mode: `.containerBackgroundRemovable(false)`, `dehydratedBg.widgetAccentable()` so bg gets tint, water stays lighter
+- **Theme-aware:** `AquaWidgetEntry` carries `themeID`; `AppTheme.forID()` resolves colors. Tinted mode stays system-driven
+- Lock-screen timeline: single entry at `now` (no sub-second fill-ramp — iOS throttles accessory widgets), then 5-min drain entries
 
-### 4. Widget water invisible in iOS Tinted mode (Widget)
-- **Bug:** In Home Screen Tinted mode, the water fill was invisible — the widget showed a flat tinted background with no water.
-- **Cause:** The system removes `containerBackground` content by default in tinted mode, discarding the water fill entirely.
-- **Fix:** Added `.containerBackgroundRemovable(false)` to the widget configuration so the custom background persists. Marked `dehydratedBg` with `.widgetAccentable()` so the system renders the background with the tint color (darker) while the water stays in the non-accented group (lighter). Also added `@Environment(\.widgetRenderingMode)` detection with conditional text/button colors that swap to dark when on water in tinted mode.
+### Theme infrastructure (V1.3 — foundation for V1.4)
+- `AppTheme` struct with 19 color roles: water fill, dehydrated bg, header (dark+on-water), stats (dark+on-water), last-sip text, sip button, welcome accent, preferred color scheme
+- `ThemeID`: `.default` (current cream+blue look) + `.kurosawa` (grey+black placeholder)
+- `SharedStorage.selectedThemeID` rw + `currentTheme` resolved; setting ID triggers `reloadAllTimelines()`
+- VM `theme` property synced on init + refresh
+- All inline RGB literals across app + widget + welcome replaced with `theme.*`
+- Default theme reproduces exact previous look (no visual change)
 
-## V1.1 Features
+## V1.4 Completed
 
-### Apple HealthKit Integration
-- **What:** Each sip saves a `dietaryWater` sample to Apple Health, from both the main app and the widget.
-- **Flow:** First sip in the main app triggers the system HealthKit authorization sheet (write-only for Water). Once authorized, all subsequent sips — including widget taps — write silently. Failures are non-blocking and never prevent a sip from being logged.
-- **Implementation:** `HealthKitManager` — shared target membership (app + widget). Called from `WaterStateViewModel.logWater()` (app) and `LogWaterIntent.perform()` (widget).
-- **Files changed:**
-  - `Core/HealthKitManager.swift` — new, shared target membership (app + widget)
-  - `Core/WaterStateViewModel.swift` — added `Task { await HealthKitManager.saveSip() }` in `logWater()`
-  - `AquaWidgetExtension/AquaWidget.swift` — added `await HealthKitManager.saveSip()` in `LogWaterIntent.perform()`
-  - `aqua.entitlements` + `AquaWidgetExtension.entitlements` — added `com.apple.developer.healthkit` keys
-  - Xcode: HealthKit capability enabled on both targets, usage descriptions set in build settings
+### Session log — Theme system shipped (May 2026)
 
-## V1.2 Bug Fixes
+The V1.3 foundation (theme model + storage + inline swipe preview) was extended into a **discoverable, polished theme-picking flow**:
 
-### 5. Widget sips not writing to Apple Health (Widget)
-- **Bug:** Logging water via the widget never saved to Apple Health. Only in-app sips reached HealthKit.
-- **Cause:** Two issues. (1) The widget extension target was missing `INFOPLIST_KEY_NSHealthUpdateUsageDescription` in its build settings — without the write-usage description, `requestAuthorization(toShare:read:)` threw `errorAuthorizationDenied` and the `guard` bailed out before attempting the save. (2) `HealthKitManager` was `@MainActor`-isolated, adding unnecessary actor-hopping in the widget extension process, and `saveSip()` called `requestAuthorization` unconditionally — which can't present UI from an extension.
-- **Fix:** Added `NSHealthUpdateUsageDescription` to both Debug and Release build settings of the widget extension target. Removed `@MainActor` from `HealthKitManager` (HKHealthStore is thread-safe). Added a `requestAuth` parameter to `saveSip(requestAuth:)` — the main app uses the default (`true`) to trigger the authorization sheet; the widget passes `false` to skip it. `saveSip` now returns `Bool`; on success the widget sets `"healthKitAuthResolved"` in shared `UserDefaults`. The same flag is set by the main app after a successful in-app save.
+1. **Discoverability** — `logWaterButton` is now flanked by two smaller secondary circle buttons in a `controlRow` HStack. Left (`plusminus`) opens `SipVolumeSheet`; right (`circle.righthalf.filled`) opens the new `ThemeGalleryView`. The old "info button inside stats overlay → volume sheet" path was removed (single, primary entry point per action).
+2. **Sip button identity** — `AppTheme` gained `buttonPrimary{Foreground,Background}`, used only by `logWaterButton`. Stable across hydration states so the center action always reads as a solid high-contrast circle (no more white-on-white).
+3. **`ThemeGalleryView`** — full-screen `.fullScreenCover`, modeled on iOS's lock-screen wallpaper picker: black canvas, custom top bar with glass `xmark` close button matching `SipVolumeSheet`, peek-style horizontal carousel (`GeometryReader`-driven, 82% card width with computed `sideInset` padding so first/last cards center), animated wave inside each card, custom page-indicator dots, dynamic "Set \<name\> as theme" / "Unlock \<name\>" / "Applied" pill. Gallery always opens centered on the **currently-applied theme** (uses a `nil → appliedID` state transition in `.onAppear` to work around `scrollPosition(id:)`'s flaky handling of initial values when content layout depends on a `GeometryReader`).
+4. **Typography per theme** — `ThemeID.previewNameFont` returns `Inter-Medium 18pt` for `.default` and `CrimsonText-Regular 18pt` for `.kurosawa`. Same point size for both themes so the name slot has stable optical height; only the family changes.
+5. **Real fonts bundled** — `CrimsonText-Regular.ttf` + `CrimsonText-SemiBold.ttf` (Google Fonts OFL) live in `aqua/Resources/Fonts/`. `INFOPLIST_KEY_UIAppFonts` was tried but is silently dropped by Xcode 26's auto-Info-plist generator, so we register via `CTFontManagerRegisterFontsForURL(..., .process, ...)` in `BundledFonts.registerAll()`, called from `aquaApp.init()`.
 
-### 6. First widget sip opens app for HealthKit authorization (Widget → App)
-- **Problem:** Widget extensions cannot present the HealthKit authorization sheet. Users who only use the widget would never be prompted.
-- **Fix:** Two-intent pattern. A shared `LogWaterAuthIntent` (`openAppWhenRun = true`, defined in `Core/SipIntents.swift`, compiled into both targets) opens the app, requests HealthKit authorization in the foreground, saves the sip, and sets the `"healthKitAuthResolved"` flag. The background `LogWaterIntent` is used for all subsequent saves. The widget timeline provider reads the flag and passes `needsHealthKitAuth` to each entry; the widget view conditionally renders `Button(intent: LogWaterAuthIntent())` or `Button(intent: LogWaterIntent())`.
-- **Flow:** First widget tap after install/update → app opens → HealthKit permission sheet → authorized → sip saved → flag set → timeline reloads → all future taps are seamless background saves.
+**Inline swipe-to-preview flow removed (v1.4)** — `ThemeGalleryView` is now the only theme-switching surface. The old horizontal `DragGesture` on the root, `previewThemeID` state, `themeSwipeGesture`, `cyclePreview(direction:)`, `applyThemePill(for:)`, and all `isPreviewing`-branches in `theme` / `hydrationLevel` / `headerTitle` / `headerSubtitle` / `headerContent` / `controlRow` / `bumpH` are gone. `bottomBar` is now just `lastLogText`. Removed because the gallery covered the same use case while accidental horizontal swipes could drop users into preview mode unexpectedly.
 
-## V1.2 Changes
+---
 
-### Default sip volume reduced to 70 mL
-- **What:** Changed the per-sip HealthKit sample from 100 mL to 70 mL.
-- **Files changed:**
-  - `Core/HealthKitManager.swift` — `sipVolume` constant updated
-  - `project.pbxproj` — `NSHealthUpdateUsageDescription` strings updated (all 4 build configs)
+- **Bundled fonts via runtime registration** — `aqua/Resources/Fonts/CrimsonText-Regular.ttf` and `CrimsonText-SemiBold.ttf` (Google Fonts, OFL) are auto-included by `PBXFileSystemSynchronizedRootGroup` and flatten to the bundle root. Xcode's `INFOPLIST_KEY_UIAppFonts` build setting was tried but is **silently dropped** by the auto-Info-plist generator in this project's setup — verified by inspecting `Info.plist` in the built `.app`. Solution: register at startup via `CTFontManagerRegisterFontsForURL(...,  .process, ...)` in a `BundledFonts.registerAll()` helper called from `aquaApp.init()`. PostScript names: `CrimsonText-Regular`, `CrimsonText-SemiBold`. Note: `Inter-Medium` referenced throughout the app via `Font.custom("Inter-Medium", ...)` is **not bundled** and silently falls back to the system font — could be added to the same `BundledFonts` helper if/when the actual Inter font file is dropped into `aqua/Resources/Fonts/`.
 
-## V1.3 Changes
+- **Three-button control row** — `logWaterButton` is now flanked by two smaller secondary circle buttons in a new `controlRow` HStack (spacing 28):
+  - **Left: `sipVolumeButton`** (`plusminus` SF Symbol) — opens `SipVolumeSheet` directly. Replaces the old in-stats info-button entry point, which has been removed.
+  - **Right: `themeSwitchButton`** (`circle.righthalf.filled`) — taps clear any inline `previewThemeID` and present the `ThemeGalleryView` sheet (see below). Swipe gesture is retained as a parallel power-user shortcut; the swipe guard now also includes `!showThemePicker`.
+  - Both secondary buttons render via `secondaryCircleButton(systemImage:accessibilityLabel:action:)`: 16pt semibold icon, 14pt padding, theme-aware `buttonForeground`/`buttonBackground` (and `*OnWater` variants) — same hydration-driven color swap as the sip button, just smaller (~48pt outer vs. sip button's ~64pt) so the center button stays primary.
+  - The bump-tracking `ButtonFrameKey` GeometryReader stays attached to the center sip button, so water-bump positioning is unchanged. (Previous v1.4 versions had `.opacity(isPreviewing ? 0 : 1)` + `.allowsHitTesting(!isPreviewing)` on the two non-theme buttons to hide them during inline swipe-preview; removed alongside the swipe flow.)
+  - Accessibility labels: "Adjust sip amount", "Change theme".
+- **Control-row color swap is gated by actual water coverage, not hydration > 0** — `body`'s GeometryReader computes `buttonsOnWater = hydrationLevel > 0 && buttonFrame != .zero && waterSurfaceY <= buttonFrame.midY` (root coordinate space). This bool is threaded into `controlRow(buttonsOnWater:)`, `bottomBar(onWater:)`, `logWaterButton(onWater:)`, `secondaryCircleButton(onWater:)`, and `lastLogText(onWater:)`. Previously these all keyed off `hydrationLevel > 0`, which caused the side buttons + last-sip caption to flip to their translucent-on-water styling the moment any water appeared at the bottom of the screen — making them invisible against the cream/stone background until water actually rose over them. The swap now happens once roughly half the button row is underwater, with a `.animation(.easeInOut(duration: 0.35), value: onWater)` modifier on each button (and 0.3 on the caption) for a smooth crossfade.
+- **Primary sip button has a dehydrated + on-water identity** — `logWaterButton(onWater:)` renders **solid `theme.waterColor` background + white droplet** when water is below the row (high-contrast CTA on the dehydrated canvas — see Aqua's blue circle / Kurosawa's charcoal circle in the user's reference) and **`buttonPrimary{Foreground,Background}`** (white bg + tinted droplet) once water covers it. The earlier "stable in both states" model from V1.4 step 1 was retired in favor of this swap because at low water levels the white-on-cream droplet read as washed-out.
+- **New `buttonSubtle{Foreground,Background}` tokens for the side buttons** — `sipVolumeButton` + `themeSwitchButton` render in subordinate gray when dehydrated so they don't compete with the central sip button: `Color(white: 0.5)` on `Color.black.opacity(0.10)` for default, `Color(white: 0.30)` on `Color.black.opacity(0.10)` for Kurosawa. These are **deliberately distinct from `buttonForeground/Background`** (which the widget extension keeps reusing for its dehydrated drop icon and intentionally tints toward the brand water color); changing one surface shouldn't leak into the other. On-water styling is unchanged (still `buttonForegroundOnWater` / `buttonBackgroundOnWater`).
+- **`ThemeGalleryView` full-screen picker** — iOS-lock-screen-wallpaper-style theme gallery (`ContentView.swift`, presented via `$showThemePicker` using `.fullScreenCover`, not `.sheet`):
+  - **Black canvas** — `Color.black.ignoresSafeArea()` + `.preferredColorScheme(.dark)` so the gallery has its own dark "customisation surface" identity regardless of the app's selected theme.
+  - **Custom top bar** — centered "Themes" title, circular `xmark` close button on the right using `.buttonStyle(.glass)` + `.buttonBorderShape(.circle)` + `.controlSize(.large)`, which together match the size and Liquid Glass look of the SipVolumeSheet toolbar close button (toolbars in iOS 26 effectively give their `.cancellationAction` items the `.large` glass control size). Top bar height grew from 44 → 52 to accommodate. Dismisses via `@Environment(\.dismiss)`. No `NavigationStack`.
+  - **Peek-style carousel** — `GeometryReader`-wrapped horizontal `ScrollView` with `LazyHStack(spacing: 12)`. Each card has explicit `frame(width: cardWidth)` where `cardWidth = proxy.size.width * 0.82`; the HStack has `.padding(.horizontal, sideInset)` where `sideInset = (proxy.size.width - cardWidth) / 2`. This padding gives the first/last cards enough slack so `scrollPosition(id: $scrolledID, anchor: .center)` actually centers them (without it, the first card would stick to the leading edge). Snap behavior: `.scrollTargetBehavior(.viewAligned)` + `.scrollTargetLayout()` on the HStack. Vertical paddings around the carousel + page indicator + action pill were tightened to give the cards ~50pt more height (closer to the iOS lock-screen reference's tall-card ratio).
+  - **Open-on-applied-theme** — `scrolledID` (`@State ThemeID?`) **starts as `nil`** and is assigned `appliedID` in `.onAppear`. The seemingly-roundabout flow exists because `scrollPosition(id:)` doesn't reliably honor the *initial value* of its binding when the scroll content's layout depends on a `GeometryReader` (race: state set → ScrollView tries to scroll → LazyHStack hasn't measured yet → silent failure). Letting the value change *after* layout forces a real state transition the ScrollView observes. `selectedID = scrolledID ?? appliedID` keeps the page indicator + action pill on the applied state from frame zero, so there's no flash of the wrong selection while the scroll settles.
+  - **`ThemePreviewCard` (stripped)** — only renders **theme name** (display + Chinese, top-left) and **animated water level**. Theme name font is picked per-theme via `ThemeID.previewNameFont`, always at **18pt** so the name slot has a stable optical height across cards (only the family differs): `.default` uses `Font.custom("Inter-Medium", size: 18)` (silently falls back to system since Inter is not yet bundled), `.kurosawa` uses `Font.custom("CrimsonText-Regular", size: 18)` for a distinctive serif/editorial feel that pairs with the charcoal palette. Chinese subtitle is a uniform `Font.system(size: 18, weight: .medium)` for both themes. Water is a ~40% fill driven by `TimelineView(.animation)` with the same wave-phase math as the main app, so each visible card has its own live wave. Card uses 36pt continuous corner radius. **No** mini sip button, **no** applied checkmark inside the card — the action pill below already conveys applied state.
+  - **Page indicator** — custom `HStack` of 7pt circles (white when selected, `white.opacity(0.3)` otherwise) with `.easeInOut(0.2)` animation keyed on `selectedID`.
+  - **Action pill** — full-width capsule. Label/icon from `actionPillContent` tuple. States: "Applied" (translucent white bg/fg, disabled), "Unlock \<name\>" (`lock.open.fill`, still free until StoreKit), "Set \<name\> as theme" (commits via `viewModel.applyTheme` then dismisses). Non-applied pill uses the selected theme's `dehydratedBackground` as fill + `headerPrimary` as text — a colored hint of the theme on the dark canvas.
+  - The previous inline swipe-to-preview shortcut has been removed; the gallery is now the only entry point. See "Inline swipe-to-preview flow removed (v1.4)" above.
+- **Bug 7 fix:** Lock-screen accessory widgets stuck at 0% after sip — removed unreliable sub-second fill-ramp entries; timeline now starts with single entry at `now` (already ~1.0 post-sip), then standard 5-min drain. WidgetKit handles transitions. (`AquaWidgetExtension/AquaWidget.swift`)
+- **Theme switching (visual half of v1.4 theme feature):**
+  - **Kurosawa palette finalized** — light scheme, charcoal water (`white: 0.10`) on warm stone background (`#E3E0DB`); see `Core/AppTheme.swift`. `ThemeID` is `Identifiable` with `displayName` (English) + `nameChinese` (e.g. "Kurosawa" / "黑澤") used in the gallery card header.
+  - **Single entry point: `ThemeGalleryView`** — tapping `themeSwitchButton` in the `controlRow` opens the gallery via `.fullScreenCover`. The earlier inline swipe-to-preview/apply prototype (root `DragGesture` + `previewThemeID` + apply-pill in the bottom bar) was removed; see the dedicated "Inline swipe-to-preview flow removed" note above.
+  - **`ContentView` computed simplifications post-removal**:
+    - `theme: AppTheme` — returns `viewModel.theme` directly.
+    - `hydrationLevel: Double` — pass-through to `viewModel.hydrationLevel`.
+    - `headerTitle` / `headerSubtitle` — only `Aqua / 水` ↔ `Sip / 飲` based on hydration.
+    - `bottomBar` — always renders `lastLogText`.
+    - `controlRow` — `sipVolumeButton` and `logWaterButton` are always visible/interactive; no preview-hiding modifiers.
+    - `bumpH` — depends only on `hydrationLevel > 0` and a valid `buttonFrame`.
+  - **Unlocks storage** — `SharedStorage.unlockedThemeIDs` (`Set<ThemeID>`, App Group), `isUnlocked()`, `unlock()` helpers. `.default` always included. Currently unlocking is free (placeholder) — when StoreKit 2 ships, hook a verified `Transaction` listener to `unlockTheme()` instead.
+  - **VM hooks** — `WaterStateViewModel.unlockedThemeIDs`, `applyTheme(_:)`, `unlockTheme(_:)`; synced on `refreshFromStorage()`.
+  - **No widget impact** — theme already flows through to widgets via `selectedThemeID` setter (`reloadAllTimelines()`).
+- **Project membership fix** — `ContentView.swift` was accidentally added to the widget extension's `membershipExceptions` in `aqua.xcodeproj/project.pbxproj`, causing "Cannot find 'WaterStateViewModel' in scope" build errors when the widget tried to compile `ContentView`. Removed. The exceptions list correctly contains only `Core/AppTheme.swift`, `Core/HealthKitManager.swift`, `Core/SipIntents.swift` — all genuinely shared with the widget.
 
-### Lock Screen widget redesign
-- **What:** Replaced the flat, non-informative lock screen widgets with battery-style gauges that reflect the current hydration level.
-- **Circular** (`.accessoryCircular`): Now uses `Gauge` with `.accessoryCircularCapacity` — a circular progress ring that drains over 2 hours matching the hydration formula. Center shows `drop.fill` icon when hydrated (>0%), switches to "飲" when fully dehydrated (0%).
-- **Rectangular** (`.accessoryRectangular`): Mirrors the iOS battery rectangular widget layout — line 1: drop icon + hydration percentage (e.g. "72%"); line 2: "Hydrated" when >0%, "Sip 飲" at 0%; line 3: `Gauge` with `.accessoryLinearCapacity` bar.
-- **Tap behavior changed:** Lock screen widgets no longer log sips — tapping opens the app instead. Removed all `Button(intent:)` wrappers from accessory views; default WidgetKit tap-to-open behavior applies.
+- **Adaptive status bar glyphs (UIKit window trait, NOT SwiftUI's `.preferredColorScheme`)** — the time, signal, wifi, and battery icons flip between dark and light content the moment the water surface rises into the status bar's safe-area inset, restoring legibility against both themes' dark `waterColor` (Default's deep blue and Kurosawa's near-black). This took **three attempts** because SwiftUI's `.preferredColorScheme` bridge to UIKit's status bar is fundamentally broken for dynamic updates in our setup — the saga is worth recording in detail because every "obvious" fix runs into the same wall.
 
-### Widget split into two configurations
-- **What:** Split the single `AquaWidget` into two separate `Widget` structs so each gets its own description in the widget picker.
-- **`SipHomeWidget`** (kind: `"AquaWidget"`, preserved for backward compatibility) — supports `.systemSmall`, `.systemMedium`. Display name: "Sip", description: "Track your hydration and log a sip from your Home Screen."
-- **`SipStatusWidget`** (kind: `"SipStatusWidget"`, new) — supports `.accessoryCircular`, `.accessoryRectangular`. Display name: "Sip", description: "Your hydration level at a glance."
-- `AquaWidgetBundle` updated to register both widgets.
-- All `reloadTimelines(ofKind: "AquaWidget")` calls across the codebase replaced with `reloadAllTimelines()` so both widget kinds refresh after every sip.
-- **Note:** Existing lock screen widgets will need to be re-added after update (new kind). Home screen widgets are unaffected.
-- **Files changed:**
-  - `AquaWidgetExtension/AquaWidget.swift` — circular/rectangular views rewritten, `AquaWidget` split into `SipHomeWidget` + `SipStatusWidget`, preview updated
-  - `AquaWidgetExtension/AquaWidgetBundle.swift` — registers both widgets
-  - `Core/SharedStorage.swift` — `reloadAllTimelines()`
-  - `Core/SipIntents.swift` — `reloadAllTimelines()`
-  - `Core/WaterStateViewModel.swift` — `reloadAllTimelines()`
+  - **Geometry check (unchanged across all three attempts):** `ContentView`'s outer `GeometryReader` computes `waterCoversStatusBar = waterSurfaceY <= max(0, statusBarBottom - 6)`. The 6pt padding completes the swap a beat before the wave's trough would otherwise expose the light `dehydratedBackground` under the glyphs.
 
-### Daily sip count tracking
-- **What:** Every sip increments a daily counter stored in App Group `UserDefaults`. The count resets automatically when the calendar day changes. A 7-day history dictionary (`[String: Int]`, date string → count) is maintained alongside, auto-pruning entries older than 7 days.
-- **Widget display:** The sip count appears in the top-right of `.systemSmall` and `.systemMedium` Home Screen widgets (16pt bold rounded). Uses the same `headerColor` logic as the app name text — white on water, dark on dehydrated, dark-on-tinted — so it stays legible in all states.
-- **Increment paths:** Count is incremented from all three sip entry points:
-  - `SharedStorage.logWater()` (main app)
-  - `LogWaterIntent.perform()` (widget background, inline `UserDefaults` logic)
-  - `LogWaterAuthIntent.perform()` (widget auth-open, inline `UserDefaults` logic)
-- **Files changed:**
-  - `Core/SharedStorage.swift` — added `todaySipCount`, `incrementSipCount()`, `last7DaysSipCounts`, `previous6DayAverage`, `sipVolumeML`, `sipHistory` dictionary, date helpers
-  - `Core/WaterStateViewModel.swift` — added `todaySipCount`, `last7Days`, `recentAverage`, `todayVolumeML`, `syncSipStats()` helper; synced on init, `refreshFromStorage()`, and `logWater()`
-  - `AquaWidgetExtension/AquaWidget.swift` — `AquaWidgetEntry` gains `sipCount: Int`; `AquaTimelineProvider` reads count via `todaySipCount()` helper; `LogWaterIntent` gets inline `incrementSipCount(suite:)` method; sip count rendered in small/medium widget header
-  - `Core/SipIntents.swift` — `LogWaterAuthIntent.perform()` increments count via inline `UserDefaults` logic
+  - **Attempt 1 — conditional `.preferredColorScheme` (FAILED, partial).** The first attempt was `.preferredColorScheme(waterCoversStatusBar ? .dark : theme.preferredColorScheme)` on the root view, with a `.animation(.easeInOut(duration: 0.25), value: waterCoversStatusBar)` modifier. This **worked for ~1 second after a sip and then snapped back to dark glyphs**. SwiftUI's bridge from `.preferredColorScheme` to `UIHostingController.preferredStatusBarStyle` fires at initial render but doesn't reliably re-propagate when the bound value changes mid-session — when the VM's 1s refresh timer ticked and rebuilt the body, the bridge didn't re-push and UIKit reverted.
 
-### Stats overlay (analytics view)
-- **What:** Tapping the sip count number in the app header toggles a centered stats overlay. Tapping again (now an ✕ icon) dismisses it. The overlay displays three sections:
-  1. **Sips today** — large 48pt bold rounded number + "Sips today" label
-  2. **Total volume** — 40pt bold rounded number + "ml" unit + "In total" label (computed as `sipCount × 70`)
-  3. **7-day bar chart** — 7 vertical bars (oldest left, today right); today's bar is wider and uses `primary` color, previous days are thinner and use `secondary` color; max bar height 40px; below the bars a comparison label ("More than 7-day avg." / "Less than 7-day avg." / "Start sipping to build your history" for new users)
-- **Toggle UX:** The top-right element is a `Button` that swaps between the sip count number and an ✕ icon via `ZStack` + `opacity` with `.spring(duration: 0.35, bounce: 0.15)` animation. Both are in a fixed `frame(height: 27)` to prevent positional shift.
-- **Description text:** All labels use `.font(.subheadline)`. The `secondaryAlt` parameter was removed — descriptions, "ml" unit, and past-day bars all share a single `secondary` color.
-- **Stats overlay colors:** Dual-layer with wave-shape mask for pixel-perfect color split:
-  - **Light background** (dehydrated): primary `#888888` (medium gray), secondary `#B9B7B6` (warm light gray)
-  - **Dark background** (water filled): primary `.white`, secondary `#86C5F6` (light blue)
-  - Past 6-day bars use the `secondary` color (matching descriptions); today's bar uses `primary` at full opacity.
-- **Show/hide animation:** `.transition(.opacity.combined(with: .scale(scale: 0.92)))` on the overlay.
+  - **Attempt 2 — custom `UIHostingController` subclass (FAILED, no effect).** Switched `aquaApp.swift` from SwiftUI `App`/`WindowGroup` to a UIKit `@main AppDelegate` + `SceneDelegate` that installed a `SipHostingController<ContentView>` as the root view controller, with `preferredStatusBarStyle` reading from a `@MainActor StatusBarStyleController` singleton. `ContentView` pushed `.lightContent`/`.darkContent` via `.onChange` + `.onAppear`; the singleton's `didSet` walked every `UIWindowScene` and called `setNeedsStatusBarAppearanceUpdate()` inside a `UIView.animate(withDuration: 0.25)`. Even after also overriding `childForStatusBarStyle` to return `nil` (so the hidden SwiftUI child controller couldn't intercept), **glyphs stayed dark**. Most likely cause: the surviving `.preferredColorScheme(theme.preferredColorScheme)` on the root view was *still* bridging an explicit `preferredStatusBarStyle = .darkContent` into our subclass — and an explicit return value beats trait-based fallback every time. (Independently, `INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES` may have generated a scene manifest that bypassed our `application(_:configurationForConnecting:)` and re-installed a default SwiftUI hosting controller; never definitively confirmed because attempt 3 sidestepped the question.)
 
-### Stats overlay blur effect
-- **What:** When the stats overlay is open, everything except the close button (✕), the sip button, and the "Last sip" text is de-emphasized — creating a focused, modal-like feel.
-- **Background blur:** The water fill + dehydrated background ZStack gets `.blur(radius: 20)` and `.scaleEffect(1.1)` when stats are shown. The scale pushes edges off-screen to prevent the white fringe artifact that SwiftUI blur creates at view boundaries.
-- **Header title fade:** The app name ("Aqua"/"Sip") and Chinese character ("水"/"飲") fade out with `.opacity(0)` when stats are shown (blur was tried first but created an ugly text smudge artifact). The close button (✕) in the top-right stays fully visible and sharp.
-- **Wave-shape mask unaffected:** The `waterShapeMask` renders its own independent `WaveShape` via `TimelineView` — it does not depend on the visual blur of the water fill. The text color split remains pixel-perfect even with the background blurred.
-- **Animation:** All blur/opacity/scale changes animate with the same `.spring(duration: 0.35, bounce: 0.15)` transaction as the stats toggle.
+  - **Attempt 3 — `UIWindow.overrideUserInterfaceStyle`, no SwiftUI bridge (SHIPPED).** Reverted `aquaApp.swift` back to the simple SwiftUI `App` / `WindowGroup` lifecycle — `BundledFonts.registerAll()` is back in `aquaApp.init()`, and the entire `AppDelegate`/`SceneDelegate`/`SipHostingController`/`StatusBarStyleController` stack is gone. **Dropped `.preferredColorScheme(theme.preferredColorScheme)` from `ContentView` entirely.** With no explicit style coming from SwiftUI, `preferredStatusBarStyle` falls back to `.default`, which UIKit resolves against the trait collection — and the trait collection is exactly what `UIWindow.overrideUserInterfaceStyle` controls (the same hook the home indicator's automatic contrast adapt hangs off of). New `ContentView.setStatusBarLightContent(_:)` helper finds the key window via `UIApplication.shared.connectedScenes` and swaps its `overrideUserInterfaceStyle` between `.light` (default — also pins the app to its intended light identity for users on system-wide Dark Mode) and `.dark` (water covers status bar → trait collection becomes dark → glyphs render light). Wrapped in `UIView.animate(withDuration: 0.3)` so the fade is in lockstep with the rising water. Driven by `.onChange(of: waterCoversStatusBar)` + `.onAppear` on the root view.
 
-### iOS home-indicator-style adaptive text color
-- **What:** Header text and stats overlay text automatically switch between dark and white at the exact water boundary, matching the pixel-level behavior of the iOS home indicator bar. As the water wave animates, the color split tracks every frame.
-- **How:** Dual-layer rendering — each text element (header, stats overlay) is rendered twice:
-  1. **Dark layer** (base): dark text always visible, readable on the beige dehydrated background
-  2. **White layer** (overlay): white text masked by `waterShapeMask` so it only appears where water covers the content
-- **`waterShapeMask`:** Renders the exact same `WaveShape` used by the water fill — same `TimelineView(.animation(...))`, same `wavePhase` from wall-clock time, same `amplitude`, `frequency`, `bumpHeight`, `bumpWidth`. A `GeometryReader` reads the masked view's position in the `"root"` coordinate space and applies `.offset(y: -frame.minY)` so the mask aligns precisely with the background water. Both the header and stats overlay share this mask function.
-- **Replaces:** The previous `onWater` boolean threshold, which caused readability issues when the water was at the header level.
+  - **Side effect of dropping `.preferredColorScheme(.light)`: `SipVolumeSheet` would inherit the dark trait** while presented during the brief high-water window, dragging its `.secondary` / `.tertiary` text and system-coloured `NavigationStack` chrome into dark mode. **Fix:** pinned `SipVolumeSheet` itself to `.preferredColorScheme(.light)`. `ThemeGalleryView` was already `.preferredColorScheme(.dark)` so it's unaffected. `ContentView` only uses explicit theme colours so it doesn't care which way the trait goes.
 
-### Adaptive sip button
-- **What:** The sip button now adapts its color based on the water level, matching the widget's color logic so it stays visible in all states.
-- **On water** (hydrated): white `drop.fill` icon + `Color.white.opacity(0.25)` translucent circle background — visible on the blue water.
-- **Dehydrated:** `waterBlue` icon + `waterBlue.opacity(0.15)` translucent circle background — subtle on the beige background.
-- **Replaces:** The previous solid `waterBlue` circle that was invisible when fully submerged in water.
+  - **Key takeaway for future status-bar work in this codebase:** if you find yourself reaching for `.preferredColorScheme(...)` to control the iOS status bar, **don't** — it's the trap that ate two attempts here. Use `UIWindow.overrideUserInterfaceStyle` with `preferredStatusBarStyle` falling back to `.default`, and pin individual surfaces with their own `.preferredColorScheme` modifier when they need to opt out of the window-wide trait.
 
-### Sip sound effect
-- **What:** A drinking/gulp sound plays when the user taps the sip button in the main app.
-- **Implementation:** `AVAudioPlayer` loaded from a bundled `sip.mp3` (also checks for `.wav`/`.caf`). The player is a static property on `ContentView`, pre-loaded via `prepareToPlay()` for zero-latency playback. Sound resets (`currentTime = 0`) before each play to handle rapid taps.
-- **Widget limitation:** Widget extensions cannot play audio — the sound only plays from the main app.
-- **Sound asset:** `sip.mp3` — sourced from Pixabay (royalty-free, no attribution required).
-- **Files changed:**
-  - `ContentView.swift` — added `import AVFoundation`; static `sipSoundPlayer`; play call in `logWaterButton` action
-
-### Theme infrastructure (foundation for v1.4 theme switching)
-- **What:** Extracted all hardcoded RGB color literals into a centralized `AppTheme` model. Every color role in the app, widget, and welcome overlay now reads from the active theme instead of inline constants. The selected theme ID is stored in App Group `UserDefaults` so the widget stays in sync.
-- **ThemeID enum:** `.default` (cream + blue, current look) and `.kurosawa` (grey + black, placeholder colors for v1.4).
-- **AppTheme struct:** 19 color roles covering water fill, dehydrated background, header text (dual-layer dark/on-water), stats overlay (dual-layer), last-sip text, sip button, welcome accent, and preferred color scheme.
-- **Theme storage:** `SharedStorage.selectedThemeID` (read/write) + `SharedStorage.currentTheme` (resolved `AppTheme`). Setting the theme ID triggers `reloadAllTimelines()`.
-- **ViewModel:** `WaterStateViewModel.theme` property, synced on init and `refreshFromStorage()`.
-- **Widget:** `AquaWidgetEntry` carries `themeID`; `AquaTimelineProvider` reads it from the shared suite; `AquaWidgetView` resolves `AppTheme.forID(entry.themeID)` and uses theme colors for all non-tinted rendering. Tinted-mode colors remain system-driven.
-- **No visual change:** The default theme reproduces the exact same cream-and-blue colors. The app looks identical to before.
-- **Files changed:**
-  - `Core/AppTheme.swift` — new, **must be added to both app and widget targets in Xcode**
-  - `Core/SharedStorage.swift` — added `selectedThemeID`, `currentTheme`
-  - `Core/WaterStateViewModel.swift` — added `theme` property, synced on refresh
-  - `ContentView.swift` — replaced all inline colors with `theme.*` properties, `preferredColorScheme` from theme
-  - `AquaWidgetExtension/AquaWidget.swift` — removed module-level color constants, added `themeID` to entry/provider, replaced inline colors with theme lookups
-  - `UI/WelcomeOverlay.swift` — accepts `theme: AppTheme` parameter, uses theme colors
-
-### Stats overlay polish
-- **Blurred water mask on stats:** The dual-layer water shape mask on the stats overlay now uses `.blur(radius: 30)`, creating a soft gradient blend between dark and light colors. This prevents the bar chart from looking like bars are partially "filled" when the water wave intersects them. The header keeps the sharp pixel-perfect split.
-- **Sip count weight:** Changed from `.bold` to `.semibold`.
-- **Sip count / close button color:** On the dehydrated (cream) background, the sip count number and close button (✕) now use `#888888` (`statsPrimary`) instead of near-black `headerPrimary`. A new `buttonColor` parameter was added to `headerContent` to decouple the button color from the app name color. On water they remain white.
-
-### Adjustable sip volume
-- **What:** Users can now adjust the per-sip water volume (default 70ml). An info button (`info.circle`, 20px semibold, `primary` color) appears next to "ml" in the stats overlay. Tapping it opens a full-page sheet.
-- **Sheet UI:** Navigation bar with "Sip Volume" title; iOS 26 liquid glass circular close button (✕, top left) and blue prominent save button (✓, top right). Center shows the volume with `(−)` and `(+)` circle buttons in iOS blue, stepping by 10ml. Minimum is 70ml (minus button disabled and faded at floor). "Each sip" label below the stepper. Footnote at the bottom: "Default sip is 70ml. Changes will apply from the next sip onward — previous sips keep their original amount."
-- **Volume accumulation:** Total mL is now tracked as a running accumulator (`todayTotalVolumeML`) rather than `sipCount × currentVolume`. Each sip adds whatever the volume setting was at that moment. Changing the volume does **not** retroactively recalculate past sips — only future sips use the new amount.
-- **Migration:** For users who upgrade mid-day with existing sip count data but no volume tracking, the system assumes those sips were at 70ml (the original default). The first new sip after the update accumulates correctly on top.
-- **Storage:** `SharedStorage.sipVolumeML` changed from a hardcoded `let = 70` to a read/write App Group `UserDefaults` property (default 70). `SharedStorage.todayTotalVolumeML` is a new accumulated value that resets on day change.
-- **HealthKit:** `HealthKitManager.sipVolume` now reads the user's chosen volume from App Group UserDefaults (reads directly, not via SharedStorage, since SharedStorage isn't in the widget target).
-- **All 3 sip entry points updated:** `SharedStorage.incrementSipCount()` (main app), `LogWaterIntent.incrementSipCount(suite:)` (widget background), `LogWaterAuthIntent.perform()` (widget auth-open) — all accumulate actual volume alongside the sip count.
-- **Files changed:**
-  - `Core/SharedStorage.swift` — `sipVolumeML` read/write property, `todayTotalVolumeML` accumulator, volume accumulation in `incrementSipCount()`
-  - `Core/WaterStateViewModel.swift` — `sipVolumeML` and `todayVolumeML` as stored properties synced from SharedStorage
-  - `Core/HealthKitManager.swift` — `sipVolume` reads from UserDefaults instead of hardcoded 70
-  - `ContentView.swift` — `SipVolumeSheet` view, `showVolumeSheet` state, info button in stats, `.sheet` modifier, blurred stats mask, header `buttonColor` parameter
-  - `AquaWidgetExtension/AquaWidget.swift` — volume accumulation in inline `incrementSipCount`
-  - `Core/SipIntents.swift` — volume accumulation in `LogWaterAuthIntent`
-
-### V1.3 files changed (cumulative)
-- `Core/AppTheme.swift` — new (theme model + default/kurosawa definitions)
-- `Core/SharedStorage.swift` — theme storage, adjustable sip volume, volume accumulator
-- `Core/WaterStateViewModel.swift` — theme property, sip volume + accumulated volume properties
-- `Core/HealthKitManager.swift` — dynamic sip volume from UserDefaults
-- `Core/SipIntents.swift` — volume accumulation in auth intent
-- `ContentView.swift` — theme-driven colors, stats overlay polish, adjustable sip volume sheet, blur effect, header title fade, adaptive sip button, sip sound, `import AVFoundation`
-- `AquaWidgetExtension/AquaWidget.swift` — theme-aware widget rendering, volume accumulation
-- `UI/WelcomeOverlay.swift` — theme-aware welcome overlay
-- `sip.mp3` — bundled sound asset (app target only)
-
-## V1.4 Planned Tasks
-1. **Kurosawa theme** — finalize the grey + black palette for all 19 color roles, create Kurosawa app icon asset.
-2. **Swipe-to-switch UI** — horizontal swipe gesture (Instagram-story style) to preview and select themes.
-3. **StoreKit 2 in-app purchase** — pay-to-unlock Kurosawa theme, with restore-purchase support.
-4. **App icon switching** — `setAlternateIconName()` to swap icon when theme changes.
-5. **Lock indicator** — show lock icon on unpurchased themes in the swipe UI.
+## V1.4 Remaining Tasks
+1. **StoreKit 2 IAP** — pay-to-unlock Kurosawa theme + restore-purchase. Wire `WaterStateViewModel.unlockTheme()` to a verified `Transaction` listener; replace the free `onUnlock` callback in `ThemePickerSheet` with a real purchase flow (or surface a "Restore" affordance). Storage layer (`unlockedThemeIDs`) is already in place.
+2. **App icon switching** — `setAlternateIconName()` swap on theme apply. Requires Xcode `CFBundleIcons` / `CFBundleAlternateIcons` plist entries + Kurosawa icon asset.
+3. **Kurosawa app icon asset** — design + add to assets.
+4. **Widget header readability** — tune `headerOnWater` threshold (currently `> 0.8`) so app name + sip count only switch to on-water colors when water actually reaches them.
+5. **Stats overlay wave-mask** — keep dual-layer dehydrated + on-water rendering with blurred `waterShapeMask` (don't revert to single `>50%` threshold).

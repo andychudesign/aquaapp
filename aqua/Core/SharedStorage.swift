@@ -163,6 +163,35 @@ enum SharedStorage {
         .forID(selectedThemeID)
     }
 
+    // MARK: - Theme unlocks
+    // Currently grants Kurosawa for free (no IAP gate yet). Once StoreKit 2
+    // ships, only `.default` will be unlocked by install; paid themes will
+    // be added to this set on successful purchase / restore.
+
+    private static let unlockedThemesKey = "unlockedThemes"
+
+    static var unlockedThemeIDs: Set<ThemeID> {
+        get {
+            let stored = suite?.array(forKey: unlockedThemesKey) as? [String] ?? []
+            var set = Set(stored.compactMap(ThemeID.init(rawValue:)))
+            set.insert(.default)
+            return set
+        }
+        set {
+            suite?.set(newValue.map(\.rawValue), forKey: unlockedThemesKey)
+        }
+    }
+
+    static func isUnlocked(_ id: ThemeID) -> Bool {
+        unlockedThemeIDs.contains(id)
+    }
+
+    static func unlock(_ id: ThemeID) {
+        var current = unlockedThemeIDs
+        current.insert(id)
+        unlockedThemeIDs = current
+    }
+
     // MARK: - Log water
 
     /// Record that the user just drank water.

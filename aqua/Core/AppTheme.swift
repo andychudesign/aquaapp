@@ -5,9 +5,26 @@
 
 import SwiftUI
 
-enum ThemeID: String, CaseIterable {
+enum ThemeID: String, CaseIterable, Identifiable {
     case `default`
     case kurosawa
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .default:  return "Aqua"
+        case .kurosawa: return "Kurosawa"
+        }
+    }
+
+    /// Chinese counterpart shown beneath `displayName` while previewing themes.
+    var nameChinese: String {
+        switch self {
+        case .default:  return "水"
+        case .kurosawa: return "黑澤"
+        }
+    }
 }
 
 struct AppTheme {
@@ -34,6 +51,23 @@ struct AppTheme {
     let buttonBackground: Color
     let buttonForegroundOnWater: Color
     let buttonBackgroundOnWater: Color
+
+    /// Subordinate dehydrated-state colors for the flanking secondary buttons
+    /// in the main app's `controlRow` (sip-volume + theme-switch). Gray-toned
+    /// so they sit visually *below* the central sip button rather than
+    /// competing with it. Kept distinct from `buttonForeground/Background`
+    /// (which the widget reuses as its dehydrated drop-icon style and is
+    /// intentionally tinted toward the brand water color) so a change in one
+    /// surface doesn't leak into the other.
+    let buttonSubtleForeground: Color
+    let buttonSubtleBackground: Color
+
+    /// Primary sip button (center) — *on-water* identity. When water is below
+    /// the button row the primary button instead renders `waterColor` bg with
+    /// a white droplet so it reads as a high-contrast CTA on the dehydrated
+    /// background; this pair is used once water actually covers the buttons.
+    let buttonPrimaryForeground: Color
+    let buttonPrimaryBackground: Color
 
     let welcomeAccent: Color
 
@@ -67,6 +101,10 @@ extension AppTheme {
         buttonBackground: Color(red: 0.2, green: 0.55, blue: 0.9).opacity(0.15),
         buttonForegroundOnWater: .white,
         buttonBackgroundOnWater: Color.white.opacity(0.25),
+        buttonSubtleForeground: Color(white: 0.5),
+        buttonSubtleBackground: Color.black.opacity(0.10),
+        buttonPrimaryForeground: Color(red: 0.2, green: 0.55, blue: 0.9),
+        buttonPrimaryBackground: .white,
         welcomeAccent: Color(red: 0, green: 0.208, blue: 0.925)
     )
 }
@@ -76,23 +114,27 @@ extension AppTheme {
 extension AppTheme {
     static let kurosawa = AppTheme(
         id: .kurosawa,
-        preferredColorScheme: .dark,
-        waterColor: Color(white: 0.15),
-        dehydratedBackground: Color(white: 0.45),
-        headerPrimary: .white,
-        headerSecondary: Color(white: 0.78),
-        headerPrimaryOnWater: Color(white: 0.82),
-        headerSecondaryOnWater: Color(white: 0.82).opacity(0.5),
-        statsPrimary: Color(white: 0.85),
-        statsSecondary: Color(white: 0.6),
-        statsPrimaryOnWater: Color(white: 0.82),
-        statsSecondaryOnWater: Color(white: 0.6),
-        lastSipOnWater: Color(white: 0.6),
-        lastSipDehydrated: Color(white: 0.72),
-        buttonForeground: .white,
-        buttonBackground: Color.white.opacity(0.15),
-        buttonForegroundOnWater: Color(white: 0.82),
-        buttonBackgroundOnWater: Color(white: 0.82).opacity(0.25),
-        welcomeAccent: Color(white: 0.7)
+        preferredColorScheme: .light,
+        waterColor: Color(white: 0.10),
+        dehydratedBackground: Color(red: 0.89, green: 0.88, blue: 0.86),
+        headerPrimary: Color(white: 0.08),
+        headerSecondary: Color(white: 0.42),
+        headerPrimaryOnWater: .white,
+        headerSecondaryOnWater: Color.white.opacity(0.55),
+        statsPrimary: Color(white: 0.30),
+        statsSecondary: Color(white: 0.55),
+        statsPrimaryOnWater: .white,
+        statsSecondaryOnWater: Color(white: 0.78),
+        lastSipOnWater: Color.white.opacity(0.55),
+        lastSipDehydrated: Color(white: 0.45),
+        buttonForeground: Color(white: 0.08),
+        buttonBackground: Color.black.opacity(0.10),
+        buttonForegroundOnWater: .white,
+        buttonBackgroundOnWater: Color.white.opacity(0.22),
+        buttonSubtleForeground: Color(white: 0.30),
+        buttonSubtleBackground: Color.black.opacity(0.10),
+        buttonPrimaryForeground: Color(white: 0.10),
+        buttonPrimaryBackground: Color(white: 0.96),
+        welcomeAccent: Color(white: 0.10)
     )
 }

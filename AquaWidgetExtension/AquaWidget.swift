@@ -109,39 +109,44 @@ struct AquaTimelineProvider: TimelineProvider {
 
         var entries: [AquaWidgetEntry] = []
 
-        let fillStartLevel = suite?.double(forKey: "fillStartLevel") ?? 0
+        // First entry: the current hydration level at `now`. Right after a sip
+        // this is ~1.0, so the widget (especially the lock-screen accessory,
+        // which iOS throttles heavily) shows the correct level immediately
+        // instead of a stale 0 from the old fill-ramp path.
+        entries.append(AquaWidgetEntry(
+            date: now,
+            hydrationLevel: Self.hydrationLevel(at: now),
+            needsHealthKitAuth: needsAuth,
+            sipCount: sipCount,
+            themeID: themeID
+        ))
 
-        let fillDuration: TimeInterval = 2.0
-        let fillStep: TimeInterval = 0.3
-        if elapsed < fillDuration {
-            var ft = elapsed
-            while ft < fillDuration {
-                let d = logTime.addingTimeInterval(ft)
-                if d >= now {
-                    let progress = min(1.0, ft / fillDuration)
-                    let fillLevel = fillStartLevel + (1.0 - fillStartLevel) * progress
-                    entries.append(AquaWidgetEntry(date: d, hydrationLevel: fillLevel, needsHealthKitAuth: needsAuth, sipCount: sipCount, themeID: themeID))
-                }
-                ft += fillStep
-            }
-        }
-
+        // Drain entries at 5-minute intervals for the next 2 hours.
         let drainStep: TimeInterval = 300
-        var t = max(elapsed, fillDuration)
+        var t = (floor(elapsed / drainStep) + 1) * drainStep
         while t < hydrationDuration {
             let d = logTime.addingTimeInterval(t)
-            if d >= now, entries.last.map({ d.timeIntervalSince($0.date) >= 1 }) ?? true {
-                entries.append(AquaWidgetEntry(date: d, hydrationLevel: Self.hydrationLevel(at: d), needsHealthKitAuth: needsAuth, sipCount: sipCount, themeID: themeID))
+            if d > now {
+                entries.append(AquaWidgetEntry(
+                    date: d,
+                    hydrationLevel: Self.hydrationLevel(at: d),
+                    needsHealthKitAuth: needsAuth,
+                    sipCount: sipCount,
+                    themeID: themeID
+                ))
             }
             t += drainStep
         }
 
+        // Final entry: fully dehydrated at end-of-2-hour window.
         if entries.last?.hydrationLevel != 0 {
-            entries.append(AquaWidgetEntry(date: endTime, hydrationLevel: 0, needsHealthKitAuth: needsAuth, sipCount: sipCount, themeID: themeID))
-        }
-
-        if entries.isEmpty {
-            entries.append(AquaWidgetEntry(date: now, hydrationLevel: Self.hydrationLevel(at: now), needsHealthKitAuth: needsAuth, sipCount: sipCount, themeID: themeID))
+            entries.append(AquaWidgetEntry(
+                date: endTime,
+                hydrationLevel: 0,
+                needsHealthKitAuth: needsAuth,
+                sipCount: sipCount,
+                themeID: themeID
+            ))
         }
 
         completion(Timeline(entries: entries, policy: .after(endTime)))
@@ -213,7 +218,7 @@ struct AquaWidgetView: View {
 
     private var theme: AppTheme { .forID(entry.themeID) }
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
-    private var headerOnWater: Bool { entry.hydrationLevel > 0.88 }
+    private var headerOnWater: Bool { entry.hydrationLevel > 0.8 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
     private var isTinted: Bool { renderingMode == .accented }
 
@@ -235,6 +240,19 @@ struct AquaWidgetView: View {
             : (isTinted ? Color.primary : theme.statsPrimary)
     }
 
+    /// Title font for the widget header. Mirrors `ThemeID.headerTitleFont` in
+    /// the main app: Kurosawa uses Crimson Text Regular (bundled via the
+    /// widget target's font membership exceptions); the default theme stays
+    /// on the system font so it inherits dynamic-type behavior.
+    private var titleFont: Font {
+        switch entry.themeID {
+        case .default:
+            return .system(size: 15, weight: .medium)
+        case .kurosawa:
+            return .custom("CrimsonText-Regular", size: 15)
+        }
+    }
+
     var body: some View {
         switch family {
         case .systemSmall:       smallView
@@ -251,7 +269,7 @@ struct AquaWidgetView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(titleFont)
                     .foregroundStyle(headerColor)
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))
@@ -282,7 +300,7 @@ struct AquaWidgetView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 4) {
                 Text(isHydrated ? "Aqua" : "Sip")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(titleFont)
                     .foregroundStyle(headerColor)
                 Text(isHydrated ? "水" : "飲")
                     .font(.system(size: 13, weight: .medium))

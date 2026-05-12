@@ -62,6 +62,8 @@
 				Core/AppTheme.swift,
 				Core/HealthKitManager.swift,
 				Core/SipIntents.swift,
+				Resources/Fonts/CrimsonText-Regular.ttf,
+				Resources/Fonts/CrimsonText-SemiBold.ttf,
 			);
 			target = 8A8439122F636F38001338D3 /* AquaWidgetExtension */;
 		};
