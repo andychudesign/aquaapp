@@ -218,7 +218,7 @@ struct AquaWidgetView: View {
 
     private var theme: AppTheme { .forID(entry.themeID) }
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
-    private var headerOnWater: Bool { entry.hydrationLevel > 0.8 }
+    private var headerOnWater: Bool { entry.hydrationLevel > 0.75 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
     private var isTinted: Bool { renderingMode == .accented }
 
@@ -249,7 +249,7 @@ struct AquaWidgetView: View {
         case .default:
             return .system(size: 15, weight: .medium)
         case .kurosawa:
-            return .custom("CrimsonText-Regular", size: 15)
+            return .custom("CrimsonText-SemiBold", size: 15)
         }
     }
 

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @Observable
@@ -72,10 +73,34 @@ final class WaterStateViewModel {
         }
     }
 
-    /// Apply a theme. Persists to shared storage and reloads widget timelines.
+    /// Apply a theme. Persists to shared storage, updates the in-memory
+    /// theme, and synchronously asks UIKit to swap the home-screen
+    /// alternate icon. **Must be called from the user-interaction context**
+    /// of the gallery's action-pill button — iOS 26.1+ shows the "App Icon
+    /// Changed" alert via SpringBoard's out-of-process overlay and only
+    /// posts it when the call originates from a user-action context. Any
+    /// async hop (`Task { @MainActor in ... }`, `DispatchQueue.main.asyncAfter`,
+    /// or `.fullScreenCover.onDismiss`) loses that hint and SpringBoard
+    /// silently suppresses the alert.
+    ///
+    /// Both themes map to *named* alternates (`Sip-Aqua` / `Sip-Kurosawa`),
+    /// never `nil` — see `ThemeID.alternateIconName` for the rationale.
     func applyTheme(_ id: ThemeID) {
+        let previousID = SharedStorage.selectedThemeID
         SharedStorage.selectedThemeID = id
         theme = SharedStorage.currentTheme
+        guard previousID != id else { return }
+        let app = UIApplication.shared
+        guard app.supportsAlternateIcons else {
+            print("[Aqua] supportsAlternateIcons = false; skipping icon swap")
+            return
+        }
+        let desired = id.alternateIconName
+        app.setAlternateIconName(desired) { error in
+            if let error {
+                print("[Aqua] setAlternateIconName(\(desired)) failed: \(error)")
+            }
+        }
     }
 
     /// Mark a theme as unlocked. Future StoreKit purchase flow should call this

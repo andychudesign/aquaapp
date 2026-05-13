@@ -25,6 +25,23 @@ enum ThemeID: String, CaseIterable, Identifiable {
         case .kurosawa: return "黑澤"
         }
     }
+
+    /// Name of the alternate app icon bundled in the app target. Each theme
+    /// maps to a *named* alternate (never `nil`), even the default look —
+    /// iOS 26 has a known regression on the `setAlternateIconName(nil)`
+    /// path with Liquid Glass `.icon`-bundle alternates (NSPOSIXError 35,
+    /// "Resource temporarily unavailable"), and SpringBoard's out-of-process
+    /// "App Icon Changed" alert is also suppressed for the nil-revert. By
+    /// shipping `Sip-Aqua.icon` as a duplicate of the primary `Sip.icon`
+    /// and always swapping between named alternates, both directions go
+    /// through iOS's normal alternate-to-alternate transition and both
+    /// issues disappear. Names must match `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`.
+    var alternateIconName: String {
+        switch self {
+        case .default:  return "Sip-Aqua"
+        case .kurosawa: return "Sip-Kurosawa"
+        }
+    }
 }
 
 struct AppTheme {

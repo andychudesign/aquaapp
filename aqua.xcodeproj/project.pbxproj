@@ -62,8 +62,8 @@
 				Core/AppTheme.swift,
 				Core/HealthKitManager.swift,
 				Core/SipIntents.swift,
-				Resources/Fonts/CrimsonText-Regular.ttf,
-				Resources/Fonts/CrimsonText-SemiBold.ttf,
+				"Resources/Fonts/CrimsonText-Regular.ttf",
+				"Resources/Fonts/CrimsonText-SemiBold.ttf",
 			);
 			target = 8A8439122F636F38001338D3 /* AquaWidgetExtension */;
 		};
@@ -495,6 +495,7 @@
 		8A8439042F636F38001338D3 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Sip-Aqua Sip-Kurosawa";
 				ASSETCATALOG_COMPILER_APPICON_NAME = Sip;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
@@ -532,6 +533,7 @@
 		8A8439052F636F38001338D3 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Sip-Aqua Sip-Kurosawa";
 				ASSETCATALOG_COMPILER_APPICON_NAME = Sip;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;

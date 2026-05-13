@@ -21,6 +21,27 @@ private struct HeaderFrameKey: PreferenceKey {
     }
 }
 
+/// Shared surface formula used by `WaveShape` (closed body) and
+/// `WaveCrestShape` (open top line). Keeps the two paths pixel-identical.
+@inline(__always)
+private func waveSurfaceY(
+    t: CGFloat,
+    phase: Double,
+    amplitude: CGFloat,
+    frequency: Double,
+    bumpHeight: CGFloat,
+    bumpWidth: CGFloat,
+    headroom: CGFloat
+) -> CGFloat {
+    let angle1: CGFloat = (t * frequency + phase) * .pi * 2
+    let w1: CGFloat = amplitude * sin(angle1)
+    let angle2: CGFloat = (t * frequency * 0.6 - phase * 0.8) * .pi * 2
+    let w2: CGFloat = amplitude * 0.4 * sin(angle2)
+    let dx: CGFloat = t - 0.5
+    let bump: CGFloat = bumpHeight * exp(-dx * dx / (2 * bumpWidth * bumpWidth))
+    return headroom + w1 + w2 - bump
+}
+
 struct WaveShape: Shape {
     var phase: Double
     var amplitude: CGFloat
@@ -42,22 +63,15 @@ struct WaveShape: Shape {
         guard w > 0 else { return path }
 
         let headroom = amplitude * 2 + bumpHeight
-
         path.move(to: CGPoint(x: 0, y: headroom))
 
         for x in stride(from: 0, through: w, by: 1) {
             let t: CGFloat = x / w
-
-            let angle1: CGFloat = (t * frequency + phase) * .pi * 2
-            let w1: CGFloat = amplitude * sin(angle1)
-
-            let angle2: CGFloat = (t * frequency * 0.6 - phase * 0.8) * .pi * 2
-            let w2: CGFloat = amplitude * 0.4 * sin(angle2)
-
-            let dx: CGFloat = t - 0.5
-            let bump: CGFloat = bumpHeight * exp(-dx * dx / (2 * bumpWidth * bumpWidth))
-
-            let y: CGFloat = headroom + w1 + w2 - bump
+            let y = waveSurfaceY(
+                t: t, phase: phase, amplitude: amplitude,
+                frequency: frequency, bumpHeight: bumpHeight,
+                bumpWidth: bumpWidth, headroom: headroom
+            )
             path.addLine(to: CGPoint(x: x, y: y))
         }
 
@@ -65,6 +79,49 @@ struct WaveShape: Shape {
         path.addLine(to: CGPoint(x: 0, y: rect.maxY))
         path.closeSubpath()
 
+        return path
+    }
+}
+
+/// Open path tracing only the top surface of the wave (no closure, no sides).
+/// Used to stroke a specular sheen + subsurface glow band along the waterline.
+struct WaveCrestShape: Shape {
+    var phase: Double
+    var amplitude: CGFloat
+    var frequency: Double
+    var bumpHeight: CGFloat
+    var bumpWidth: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(amplitude, bumpHeight) }
+        set {
+            amplitude = newValue.first
+            bumpHeight = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let w = rect.width
+        guard w > 0 else { return path }
+
+        let headroom = amplitude * 2 + bumpHeight
+        var started = false
+        for x in stride(from: 0, through: w, by: 1) {
+            let t: CGFloat = x / w
+            let y = waveSurfaceY(
+                t: t, phase: phase, amplitude: amplitude,
+                frequency: frequency, bumpHeight: bumpHeight,
+                bumpWidth: bumpWidth, headroom: headroom
+            )
+            let p = CGPoint(x: x, y: y)
+            if started {
+                path.addLine(to: p)
+            } else {
+                path.move(to: p)
+                started = true
+            }
+        }
         return path
     }
 }
@@ -406,6 +463,12 @@ struct ContentView: View {
         }
     }
 
+    /// Layered water rendering: solid body + vertical depth gradient +
+    /// subsurface light-penetration band + crisp specular sheen along the
+    /// crest. The *primary* `WaveShape` parameters (phase / amplitude /
+    /// frequency / bumpHeight / bumpWidth) deliberately match the ones
+    /// `waterShapeMask(...)` uses, so the dual-layer text color split stays
+    /// pixel-perfect on the visible waterline.
     private func waterFillView(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
         let baseAmplitude: CGFloat = hydrationLevel > 0 ? 4 : 0
         let waveAmplitude: CGFloat = baseAmplitude + sloshAmplitude
@@ -417,14 +480,43 @@ struct ContentView: View {
             TimelineView(.animation(paused: hydrationLevel <= 0)) { timeline in
                 let wavePhase = timeline.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: 4) / 4
-                WaveShape(
-                    phase: wavePhase,
-                    amplitude: waveAmplitude,
-                    frequency: 1.5,
-                    bumpHeight: bumpHeight,
-                    bumpWidth: 0.18
+
+                let bodyShape = WaveShape(
+                    phase: wavePhase, amplitude: waveAmplitude,
+                    frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
                 )
-                .fill(theme.waterColor)
+                let crestShape = WaveCrestShape(
+                    phase: wavePhase, amplitude: waveAmplitude,
+                    frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
+                )
+
+                ZStack(alignment: .top) {
+                    bodyShape
+                        .fill(theme.waterColor)
+
+                    // Vertical depth: surface a touch lighter, bottom darker.
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color.white.opacity(0.06), location: 0.0),
+                            .init(color: Color.clear, location: 0.25),
+                            .init(color: Color.black.opacity(0.14), location: 1.0)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    .clipShape(bodyShape)
+
+                    // Subsurface glow — fakes light penetration ~6pt below the crest.
+                    crestShape
+                        .stroke(Color.white.opacity(0.10), lineWidth: 10)
+                        .blur(radius: 6)
+                        .offset(y: 6)
+                        .clipShape(bodyShape)
+
+                    // Specular sheen — bright crisp line riding the waterline.
+                    crestShape
+                        .stroke(Color.white.opacity(0.32), lineWidth: 1)
+                        .blur(radius: 0.4)
+                }
             }
             .frame(height: max(0, totalHeight))
         }
@@ -700,7 +792,13 @@ struct ContentView: View {
 
 struct SipVolumeSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var volume: Int
+    /// System color scheme captured directly from the scene's *screen* trait
+    /// so it bypasses the window-level `overrideUserInterfaceStyle` trick
+    /// `ContentView` uses for the status-bar adaptation (see comment on
+    /// `.preferredColorScheme` below).
+    @State private var systemScheme: ColorScheme = SipVolumeSheet.detectSystemScheme()
     let onSave: (Int) -> Void
 
     init(currentVolume: Int, onSave: @escaping (Int) -> Void) {
@@ -709,6 +807,19 @@ struct SipVolumeSheet: View {
     }
 
     private var isAtMinimum: Bool { volume <= 70 }
+
+    /// Reads the device's *system* light/dark preference, ignoring any
+    /// `UIWindow.overrideUserInterfaceStyle` that may currently be active.
+    /// `UIWindow.overrideUserInterfaceStyle` only mutates the window's own
+    /// trait — the enclosing `UIWindowScene.screen.traitCollection` keeps
+    /// reporting the unfiltered system value.
+    private static func detectSystemScheme() -> ColorScheme {
+        let style = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .screen.traitCollection.userInterfaceStyle ?? .light
+        return style == .dark ? .dark : .light
+    }
 
     var body: some View {
         NavigationStack {
@@ -785,14 +896,21 @@ struct SipVolumeSheet: View {
                 }
             }
         }
-        // The root view drives the iOS status bar by flipping the key
-        // window's `overrideUserInterfaceStyle` between `.light` and `.dark`
-        // — so when this sheet is presented during the high-water state the
-        // window trait is `.dark` and the sheet's `.secondary` / `.tertiary`
-        // text plus system-coloured chrome would otherwise inherit it.
-        // Pinning to `.light` here keeps the sheet's identity stable
-        // regardless of what the underlying surface is doing.
-        .preferredColorScheme(.light)
+        // Sync to the OS-level light/dark setting. The root view flips the
+        // key window's `overrideUserInterfaceStyle` for the status-bar
+        // adaptation trick, which would otherwise drag this sheet into the
+        // wrong scheme. `detectSystemScheme()` queries the *screen* trait
+        // (unaffected by the window override) so the sheet always matches
+        // what the user picked in Settings, not what the app is overriding.
+        .preferredColorScheme(systemScheme)
+        .onAppear { systemScheme = Self.detectSystemScheme() }
+        .onChange(of: scenePhase) { _, phase in
+            // Catch the user toggling system Dark Mode while this sheet is
+            // visible (e.g. swiping it down to the Control Center toggle).
+            if phase == .active {
+                systemScheme = Self.detectSystemScheme()
+            }
+        }
     }
 }
 
@@ -818,13 +936,19 @@ struct ThemeGalleryView: View {
     /// reliably drives the ScrollView to the applied theme.
     @State private var scrolledID: ThemeID?
 
+    /// Drives the bottom unlock sheet. Tapping the "Unlock <name>" pill on a
+    /// locked theme sets this to true rather than committing the unlock
+    /// directly — the sheet surfaces what the user gets + the disclaimer
+    /// before they commit (and, in v1.5, before StoreKit takes over).
+    @State private var showUnlockSheet: Bool = false
+
     private var selectedID: ThemeID { scrolledID ?? appliedID }
     private var selectedTheme: AppTheme { .forID(selectedID) }
     private var isSelectedApplied: Bool { selectedID == appliedID }
     private var isSelectedLocked: Bool { !unlockedIDs.contains(selectedID) }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -843,8 +967,61 @@ struct ThemeGalleryView: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 16)
             }
+
+            unlockOverlay
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Shared spring for the unlock overlay — passed to
+    /// `.animation(_:value: showUnlockSheet)` so open and dismiss use the
+    /// same easing as each other and feel close to the system `.sheet` stack
+    /// (`SipVolumeSheet`).
+    private static let sheetSpring: Animation = .spring(response: 0.42, dampingFraction: 0.88)
+
+    /// Custom bottom-anchored "unlock" sheet replacing what used to be a
+    /// `.sheet(isPresented:)`. iOS 26's native sheets have two problems for
+    /// this surface: (1) they reserve horizontal margins on larger devices,
+    /// which broke the edge-to-edge feel of the gallery, and (2) the system
+    /// applies a non-removable dim layer behind the sheet, which made
+    /// `.ultraThinMaterial` sample dim-on-black instead of the gallery
+    /// content beneath and rendered as a flat dark gray. Rendering our own
+    /// overlay sidesteps both: the backdrop dims via `Color.black.opacity(...)`
+    /// (tappable to dismiss), and the sheet card itself is just a
+    /// `UnlockThemeSheet` with a shaped `.ultraThinMaterial` background that
+    /// extends into the home-indicator safe area.
+    ///
+    /// Slide up / slide down matches the system `.sheet` used by
+    /// `SipVolumeSheet`. We **don't** use `if showUnlockSheet { ... }` +
+    /// `.transition(.move(edge: .bottom))` here — SwiftUI often fails to run
+    /// removal transitions for multi-view `TupleView` branches inside a
+    /// `ZStack`, so dismiss looked instant. Instead the overlay stays mounted,
+    /// the dimmer animates `opacity`, and the card animates `offset(y:)` off
+    /// the bottom of a `GeometryReader` — the same mechanical motion as
+    /// Apple's sheet dismiss. All of it is tied to `showUnlockSheet` with a
+    /// single `.animation(Self.sheetSpring, value: showUnlockSheet)` so every
+    /// mutation site (`actionPill`, backdrop tap, `Unlock now`) gets identical
+    /// easing without juggling `withAnimation` manually.
+    private var unlockOverlay: some View {
+        GeometryReader { geo in
+            let hideOffset = max(geo.size.height, 1)
+
+            ZStack(alignment: .bottom) {
+                Color.black
+                    .opacity(showUnlockSheet ? 0.55 : 0)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { showUnlockSheet = false }
+
+                UnlockThemeSheet(themeID: selectedID) {
+                    onUnlock(selectedID)
+                    showUnlockSheet = false
+                }
+                .offset(y: showUnlockSheet ? 0 : hideOffset)
+            }
+            .animation(Self.sheetSpring, value: showUnlockSheet)
+            .allowsHitTesting(showUnlockSheet)
+        }
     }
 
     private var topBar: some View {
@@ -943,9 +1120,7 @@ struct ThemeGalleryView: View {
             if isSelectedApplied {
                 return
             } else if isSelectedLocked {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    onUnlock(selectedID)
-                }
+                showUnlockSheet = true
             } else {
                 onApply(selectedID)
                 dismiss()
@@ -965,6 +1140,119 @@ struct ThemeGalleryView: View {
         .buttonStyle(.plain)
         .disabled(isSelectedApplied)
         .animation(.easeInOut(duration: 0.2), value: selectedID)
+    }
+}
+
+/// Bottom-anchored purchase confirmation surfaced when the user taps the
+/// "Unlock <name>" pill on a locked theme in `ThemeGalleryView`. Designed
+/// to read like an App Store offer card: the theme name + "Theme" subtitle
+/// header, a single large price token ("Free" during the v1.4 free
+/// preview), a "You will get" perks list, a prominent CTA, and a small
+/// disclaimer footer.
+///
+/// Rendered as a plain overlay inside `ThemeGalleryView` (not a `.sheet`)
+/// so we get full edge-to-edge width on every device and so the background
+/// material actually picks up the gallery cards underneath — see the
+/// `unlockOverlay` comment for why the native sheet stack didn't work here.
+///
+/// In v1.5, when StoreKit 2 lands, the "Free" text + onUnlock closure will
+/// be replaced with a real `Product` price + `purchase()` flow; the rest
+/// of the layout (perks, disclaimer) can stay as-is.
+private struct UnlockThemeSheet: View {
+    let themeID: ThemeID
+    let onUnlock: () -> Void
+
+    /// What the user gets for unlocking. Mirrors the three theme-aware
+    /// surfaces already shipped in v1.4 (main app palette + widget palette
+    /// + alternate home-screen app icon).
+    private var perks: [String] {
+        let name = themeID.displayName
+        return [
+            "\(name) app interface x1",
+            "\(name) widget interface x1",
+            "\(name) app icon x1"
+        ]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 2) {
+                Text(themeID.displayName)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("Theme")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .padding(.top, 32)
+
+            Text("Free")
+                .font(.system(size: 64, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.top, 22)
+
+            VStack(spacing: 10) {
+                Text("You will get")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.55))
+                ForEach(perks, id: \.self) { perk in
+                    Text(perk)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.top, 30)
+
+            Spacer(minLength: 24)
+
+            Button {
+                onUnlock()
+            } label: {
+                Text("Unlock now")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .background(Capsule().fill(.white))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
+            .accessibilityLabel("Unlock \(themeID.displayName)")
+
+            Text("\(themeID.displayName) is free until the next update. Unlock it now to keep lifetime access, even after the price goes back to normal.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
+        }
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity)
+        .frame(height: 520)
+        .background {
+            // The rounded-rect material is applied as a background view
+            // that itself ignores the bottom safe area, which is what
+            // actually pushes the glass behind the home indicator. We
+            // previously did `.background(.ultraThinMaterial) + .clipShape
+            // + .ignoresSafeArea(edges: .bottom)` on the outer view; the
+            // clip happened at the 520pt frame, then the safe-area expand
+            // left a clipped-empty band at the bottom that showed the
+            // backdrop dim through. Moving the shape into the background
+            // slot and letting it ignore safe area keeps the content in
+            // its 520pt frame while the material extends to the screen
+            // edge.
+            UnevenRoundedRectangle(
+                topLeadingRadius: 36,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 36,
+                style: .continuous
+            )
+            .fill(.ultraThinMaterial)
+            .ignoresSafeArea(edges: .bottom)
+        }
     }
 }
 
@@ -1030,7 +1318,7 @@ private extension ThemeID {
         case .default:
             return .custom("Inter-Medium", size: 18)
         case .kurosawa:
-            return .custom("CrimsonText-Regular", size: 18)
+            return .custom("CrimsonText-SemiBold", size: 18)
         }
     }
 
@@ -1042,9 +1330,19 @@ private extension ThemeID {
     var headerTitleFont: Font {
         switch self {
         case .default:
-            return .custom("Inter-Medium", size: 22)
+            // Matched to the sip-count number's 24pt rounded system font so
+            // the two header elements share an optical baseline. Was 22pt
+            // when Inter-Medium was assumed to be bundled (Inter has a
+            // slightly higher x-height than system, which would have read
+            // optically close to 24pt rounded). Inter isn't actually
+            // bundled — `.custom("Inter-Medium", ...)` silently falls back
+            // to the system font — so we were comparing system 22pt vs
+            // system rounded 24pt, and the title visibly read smaller
+            // (especially under the smallest Dynamic Type setting where
+            // the 2pt delta isn't absorbed by any optical compensation).
+            return .custom("Inter-Medium", size: 24)
         case .kurosawa:
-            return .custom("CrimsonText-Regular", size: 22)
+            return .custom("CrimsonText-SemiBold", size: 24)
         }
     }
 }
@@ -1064,4 +1362,20 @@ private extension ThemeID {
         onApply: { _ in },
         onUnlock: { _ in }
     )
+}
+
+#Preview("Unlock Theme Sheet") {
+    ZStack(alignment: .bottom) {
+        LinearGradient(
+            colors: [Color(red: 0.18, green: 0.36, blue: 0.78), Color(white: 0.85)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+
+        Color.black.opacity(0.55).ignoresSafeArea()
+
+        UnlockThemeSheet(themeID: .kurosawa) {}
+    }
+    .preferredColorScheme(.dark)
 }
