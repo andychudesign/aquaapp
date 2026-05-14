@@ -51,11 +51,25 @@ struct LogWaterIntent: AppIntent {
         suite?.set(previousLevel, forKey: "fillStartLevel")
         suite?.set(Date(), forKey: "lastWaterLogTime")
         Self.incrementSipCount(suite: suite)
+        // Reload both widget kinds explicitly. `reloadAllTimelines()` *should*
+        // cover both, but iOS 26 has been observed to silently defer the
+        // accessory (lock-screen) widget's reload — leaving it stuck on the
+        // pre-sip timeline while the home widget updates immediately.
+        // Explicit per-kind calls are more reliable for the lock-screen
+        // surface; we keep `reloadAllTimelines()` as a belt-and-suspenders
+        // catch-all.
         WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+        WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
         let saved = await HealthKitManager.saveSip(requestAuth: false)
         if saved {
             suite?.set(true, forKey: "healthKitAuthResolved")
         }
+        // Re-issue the lock-screen reload after the await — the first
+        // request can land while the intent is still suspended on the
+        // HealthKit save, and iOS sometimes coalesces it away for
+        // accessory widgets.
+        WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
         return .result()
     }
 }
@@ -175,9 +189,19 @@ struct AquaTimelineProvider: TimelineProvider {
                 ))
             }
         } else {
+            // Accessory (lock-screen) widget path. Use the actual `logTime`
+            // as the entry date — not `now` — so iOS sees a clear timeline
+            // boundary at the sip moment, and so the entry is unambiguously
+            // in the past by the time the widget renders (avoids any edge
+            // case where iOS treats a `date == captured-now` entry as
+            // future after the completion handler has been queued).
+            // The hydration level is computed from the same `elapsed` we
+            // already validated above, sidestepping a second
+            // `UserDefaults` read on a different `Date()`.
+            let currentLevel = max(0, 1 - elapsed / hydrationDuration)
             entries.append(AquaWidgetEntry(
-                date: now,
-                hydrationLevel: Self.hydrationLevel(at: now),
+                date: logTime,
+                hydrationLevel: currentLevel,
                 needsHealthKitAuth: needsAuth,
                 sipCount: sipCount,
                 themeID: themeID

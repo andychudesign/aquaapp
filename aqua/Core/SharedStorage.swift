@@ -199,6 +199,12 @@ enum SharedStorage {
         suite?.set(hydrationLevel(), forKey: "fillStartLevel")
         lastWaterLogTime = Date()
         incrementSipCount()
+        // Reload all widget kinds, then re-issue per-kind reloads —
+        // `reloadAllTimelines()` is sometimes coalesced away for the
+        // accessory (lock-screen) widget on iOS 26, leaving it stuck on
+        // the pre-sip timeline while the home widget updates instantly.
         WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+        WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
     }
 }
