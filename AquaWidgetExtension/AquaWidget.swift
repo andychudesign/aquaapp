@@ -87,6 +87,8 @@ struct AquaTimelineProvider: TimelineProvider {
         let needsAuth = !(suite?.bool(forKey: "healthKitAuthResolved") ?? false)
         let sipCount = Self.todaySipCount()
         let themeID = Self.selectedThemeID()
+        // Home-only ramp gate — see comment on the `if isHome ...` branch below.
+        let isHome = context.family == .systemSmall || context.family == .systemMedium
 
         guard let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date else {
             completion(Timeline(
@@ -109,24 +111,88 @@ struct AquaTimelineProvider: TimelineProvider {
 
         var entries: [AquaWidgetEntry] = []
 
-        // First entry: the current hydration level at `now`. Right after a sip
-        // this is ~1.0, so the widget (especially the lock-screen accessory,
-        // which iOS throttles heavily) shows the correct level immediately
-        // instead of a stale 0 from the old fill-ramp path.
-        entries.append(AquaWidgetEntry(
-            date: now,
-            hydrationLevel: Self.hydrationLevel(at: now),
-            needsHealthKitAuth: needsAuth,
-            sipCount: sipCount,
-            themeID: themeID
-        ))
+        // Home-widget fill-ramp entries (systemSmall / systemMedium only) —
+        // restores the original day-1 stepped fill. After `LogWaterIntent`
+        // reloads the timeline, WidgetKit walks through these sub-second
+        // entries in order, cross-fading each snapshot so the wave visibly
+        // climbs instead of snapping to full.
+        //
+        // **Stops:** 0% → 0.5% → 25% → 50% → 75% → 100%. The 0.5% primer right
+        // after 0% is load-bearing: WidgetKit sometimes coalesces an entry
+        // (especially the first one when the device has been idle), and
+        // without the primer the next entry up is 25% — visible as a "snap
+        // from 0% to ~50% then climb" instead of a true rise from the bottom.
+        // With the 0.5% primer, even when iOS drops the 0% entry the next
+        // landing is effectively still at the bottom of the widget.
+        //
+        // **Anchor:** `max(logTime, now)` — by the time WidgetKit actually
+        // gets around to rendering the reloaded timeline, `now - logTime`
+        // can be 50–200 ms, which previously pushed the first ~2 entries
+        // into the past. iOS then "renders the latest non-future entry" and
+        // landed on 50 % / 75 %. Anchoring forward of `now` guarantees every
+        // ramp entry is at or after WidgetKit's render clock.
+        //
+        // **Why home only:** "Bug 7" in SIP_CONTEXT — iOS aggressively
+        // throttles sub-second timeline updates for accessory (lock-screen)
+        // widgets, which previously left them stuck at 0%. Gating on
+        // `context.family` keeps the simple single-entry timeline for the
+        // accessory widgets (`Gauge` already animates value changes
+        // implicitly there) while letting the home widget get the rise.
+        //
+        // **Why no `TimelineView(.animation)`:** widget extensions don't run
+        // an active display link, so a `TimelineView(.animation)`-driven ramp
+        // freezes after a frame or two and strands the water at ~20–30 %.
+        let rampDuration: TimeInterval = 0.6
+        // Tuple = (seconds after the ramp anchor, fraction of the
+        // `startLevel → postSipLevel` segment to display at that moment).
+        let rampStops: [(time: TimeInterval, fraction: Double)] = [
+            (0.00, 0.000),
+            (0.05, 0.005),
+            (0.18, 0.250),
+            (0.33, 0.500),
+            (0.47, 0.750),
+            (0.60, 1.000),
+        ]
+        let startLevel: Double = {
+            if let n = suite?.object(forKey: "fillStartLevel") as? NSNumber {
+                return n.doubleValue
+            }
+            return 0
+        }()
+        let postSipLevel = Self.hydrationLevel(at: logTime)
+
+        if isHome && elapsed < rampDuration {
+            let rampAnchor = max(logTime, now)
+            for stop in rampStops {
+                let stepDate = rampAnchor.addingTimeInterval(stop.time)
+                let level = startLevel + (postSipLevel - startLevel) * stop.fraction
+                entries.append(AquaWidgetEntry(
+                    date: stepDate,
+                    hydrationLevel: level,
+                    needsHealthKitAuth: needsAuth,
+                    sipCount: sipCount,
+                    themeID: themeID
+                ))
+            }
+        } else {
+            entries.append(AquaWidgetEntry(
+                date: now,
+                hydrationLevel: Self.hydrationLevel(at: now),
+                needsHealthKitAuth: needsAuth,
+                sipCount: sipCount,
+                themeID: themeID
+            ))
+        }
 
         // Drain entries at 5-minute intervals for the next 2 hours.
         let drainStep: TimeInterval = 300
         var t = (floor(elapsed / drainStep) + 1) * drainStep
         while t < hydrationDuration {
             let d = logTime.addingTimeInterval(t)
-            if d > now {
+            // Skip any drain step that overlaps the ramp window so the ramp
+            // entries play through cleanly without being shadowed by a stray
+            // 5-min drain entry.
+            if d > now, d > (entries.last?.date ?? .distantPast) {
                 entries.append(AquaWidgetEntry(
                     date: d,
                     hydrationLevel: Self.hydrationLevel(at: d),
@@ -399,6 +465,15 @@ struct AquaWidgetView: View {
 
     // MARK: Water-fill background
 
+    /// The actual rising-water animation is driven by the **timeline**:
+    /// `AquaTimelineProvider.getTimeline` emits 5 sub-second entries during
+    /// the post-sip ramp window with stepped hydration levels (0%, 25%, 50%,
+    /// 75%, 100%), and WidgetKit walks through them in order. Each entry is
+    /// rendered statically by this view — no `TimelineView(.animation)`,
+    /// no `.animation(value:)` modifier — because both of those approaches
+    /// were tried and neither produces a real fill animation in widget
+    /// process context. See the comment on the ramp loop in `getTimeline`
+    /// for the full history.
     private var waterFillBackground: some View {
         GeometryReader { geo in
             let waveHeadroom: CGFloat = entry.hydrationLevel > 0 ? 8 : 0

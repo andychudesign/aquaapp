@@ -45,9 +45,19 @@ final class WaterStateViewModel {
     }
 
     /// Re-read shared storage so the app stays in sync after a widget tap or returning from background.
+    /// If the level rose meaningfully (a sip happened while we were backgrounded, typically via the
+    /// home-screen widget's `LogWaterIntent`), animate the change so the water fill rises smoothly
+    /// instead of snapping to full — mirrors the `withAnimation` wrap on the in-app sip button.
     func refreshFromStorage() {
         let level = SharedStorage.hydrationLevel()
-        hydrationLevel = level
+        let previousLevel = hydrationLevel
+        if level > previousLevel + 0.05 {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                hydrationLevel = level
+            }
+        } else {
+            hydrationLevel = level
+        }
         syncSipStats()
         theme = SharedStorage.currentTheme
         unlockedThemeIDs = SharedStorage.unlockedThemeIDs
