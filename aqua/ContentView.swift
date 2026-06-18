@@ -112,6 +112,123 @@ struct WaveCrestShape: Shape {
     }
 }
 
+// MARK: - Shared liquid-glass water (main UI + theme gallery)
+
+private enum LiquidGlassWaterMetrics {
+    static let bodyOpacity = 0.50
+    static let meniscusTintOpacity = 0.52
+}
+
+private extension ThemeID {
+    /// Layer-2 water body colour — `#0089E6` for default; Kurosawa charcoal.
+    var richWaterColor: Color {
+        switch self {
+        case .default:
+            return Color(red: 0x00 / 255.0, green: 0x89 / 255.0, blue: 0xE6 / 255.0)
+        case .kurosawa:
+            return Color(white: 0.06)
+        }
+    }
+}
+
+/// Meniscus-edge liquid glass — refracts layer-1 content near the wave crest.
+private struct MeniscusGlassBand: View {
+    let waterColor: Color
+    let bodyShape: WaveShape
+    let bodyHeight: CGFloat
+
+    var body: some View {
+        let fadeEnd = min(0.22, 64 / max(bodyHeight, 1))
+
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: bodyHeight)
+            .glassEffect(
+                .clear.tint(waterColor.opacity(LiquidGlassWaterMetrics.meniscusTintOpacity)),
+                in: bodyShape
+            )
+            .mask(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: fadeEnd * 0.45),
+                        .init(color: .clear, location: fadeEnd)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+/// Transparent tinted wave body + meniscus glass + depth/crest highlights.
+private struct LiquidGlassWaterStack: View {
+    let waterColor: Color
+    let wavePhase: Double
+    let amplitude: CGFloat
+    let bumpHeight: CGFloat
+    let bodyHeight: CGFloat
+
+    var body: some View {
+        let bodyShape = WaveShape(
+            phase: wavePhase, amplitude: amplitude,
+            frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
+        )
+        let crestShape = WaveCrestShape(
+            phase: wavePhase, amplitude: amplitude,
+            frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
+        )
+        let height = max(bodyHeight, 1)
+
+        ZStack(alignment: .top) {
+            bodyShape
+                .fill(waterColor.opacity(LiquidGlassWaterMetrics.bodyOpacity))
+
+            MeniscusGlassBand(
+                waterColor: waterColor,
+                bodyShape: bodyShape,
+                bodyHeight: height
+            )
+
+            LinearGradient(
+                stops: [
+                    .init(color: Color.white.opacity(0.10), location: 0.0),
+                    .init(color: Color.clear, location: 0.20),
+                    .init(color: Color.black.opacity(0.12), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .clipShape(bodyShape)
+            .blendMode(.overlay)
+            .allowsHitTesting(false)
+
+            crestShape
+                .stroke(Color.white.opacity(0.18), lineWidth: 12)
+                .blur(radius: 7)
+                .offset(y: 5)
+                .clipShape(bodyShape)
+                .allowsHitTesting(false)
+
+            crestShape
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.75),
+                            Color.white.opacity(0.25)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    lineWidth: 1.5
+                )
+                .blur(radius: 0.25)
+                .allowsHitTesting(false)
+        }
+        .clipShape(bodyShape)
+    }
+}
+
 struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
     @State private var buttonFrame: CGRect = .zero
@@ -130,6 +247,7 @@ struct ContentView: View {
     /// Convenience pass-through to the view-model's live hydration value.
     private var hydrationLevel: Double { viewModel.hydrationLevel }
 
+    private var richWaterColor: Color { theme.id.richWaterColor }
     /// Decides the status-bar glyph polarity from both inputs and applies it.
     /// Glyphs must be light (white) whenever the surface behind them is dark —
     /// which is true when the device is in Dark Mode (the dehydrated backdrop
@@ -211,20 +329,34 @@ struct ContentView: View {
             let buttonsOnWater = hydrationLevel > 0 && waterSurfaceY <= logButtonMidY
 
             ZStack(alignment: .bottom) {
-                ZStack(alignment: .bottom) {
-                    theme.dehydratedBackground
-                    waterFillView(screenHeight: screenHeight, bumpHeight: bumpH)
+                // Layers 1 + 2 — background, title, translucent water.
+                // `GlassEffectContainer` is scoped here so the meniscus-edge
+                // glass band (not the full body) can refract layer 1.
+                // Blurred together when the stats overlay is open.
+                GlassEffectContainer {
+                    ZStack(alignment: .bottom) {
+                        // Layer 1: full-screen canvas + static title beneath the water.
+                        theme.dehydratedBackground
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        bottomLayerTitle
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(.horizontal, 16)
+                            .padding(.top, geometry.safeAreaInsets.top + 62)
+                            .padding(.vertical, 8)
+
+                        // Layer 2: animated translucent water body.
+                        waterFillView(screenHeight: screenHeight, bumpHeight: bumpH)
+                    }
                 }
                 .ignoresSafeArea()
                 .scaleEffect(showStats ? 1.1 : 1)
                 .blur(radius: showStats ? 20 : 0)
 
+                // Layer 3: interactive chrome — stats, buttons, last-sip caption.
                 VStack(spacing: 0) {
-                    stickyHeader(
-                        screenHeight: screenHeight,
-                        bumpHeight: bumpH
-                    )
-                    hydrationVisual(screenHeight: screenHeight, bumpHeight: bumpH)
+                    headerLayoutSpacer
+                    topLayerCenter(screenHeight: screenHeight, bumpHeight: bumpH)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     controlRow(buttonsOnWater: buttonsOnWater)
                     bottomBar(onWater: buttonsOnWater)
@@ -329,27 +461,33 @@ struct ContentView: View {
         lastLogText(onWater: onWater)
     }
 
-    private func stickyHeader(
-        screenHeight: CGFloat,
-        bumpHeight: CGFloat
-    ) -> some View {
-        // Title text keeps the dual-layer water mask so the color split
-        // tracks the wave as it rises/falls through it. The sip-count and
-        // close buttons live in `headerGlassButtons` (a sibling overlay) so
-        // their Liquid Glass styling isn't affected by the masked title stack.
-        ZStack {
-            headerTitleBlock(
-                primary: theme.headerPrimary,
-                secondary: theme.headerSecondary
-            )
+    /// Layer 1 title — single dehydrated palette. The mid-layer liquid-glass
+    /// water refracts this text when the fill rises over it.
+    private var bottomLayerTitle: some View {
+        headerTitleBlock(
+            primary: theme.headerPrimary,
+            secondary: theme.headerSecondary
+        )
+    }
 
-            headerTitleBlock(
-                primary: theme.headerPrimaryOnWater,
-                secondary: theme.headerSecondaryOnWater
-            )
-            .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight))
+    /// Invisible duplicate of the title block so layer 3 keeps the same
+    /// vertical layout the old `stickyHeader` provided.
+    private var headerLayoutSpacer: some View {
+        headerTitleBlock(primary: .clear, secondary: .clear)
+            .padding(.vertical, 8)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+    }
+
+    /// Layer 3 centre — stats overlay only (title lives on layer 1).
+    private func topLayerCenter(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
+        ZStack {
+            if showStats {
+                statsOverlay(screenHeight: screenHeight, bumpHeight: bumpHeight)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+            }
         }
-        .padding(.vertical, 8)
+        .animation(.easeInOut(duration: 0.15), value: hydrationLevel)
     }
 
     /// Sip-count + close (✕) glass buttons, top-right. Sits in a `VStack`
@@ -369,10 +507,8 @@ struct ContentView: View {
     }
 
     /// Renders the title block (Aqua/Sip + 水/飲, top-left) only. The sip-count
-    /// number and the close (✕) button are intentionally NOT included — both
-    /// are rendered separately in `stickyHeader` (the count as a standalone
-    /// Liquid Glass button, the close with its own dual-layer water mask) so
-    /// they aren't duplicated by this block's dual-layer treatment.
+    /// number and the close (✕) button live in `headerGlassButtons` so they
+    /// aren't duplicated here.
     private func headerTitleBlock(primary: Color, secondary: Color) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
@@ -486,12 +622,9 @@ struct ContentView: View {
         }
     }
 
-    /// Layered water rendering: solid body + vertical depth gradient +
-    /// subsurface light-penetration band + crisp specular sheen along the
-    /// crest. The *primary* `WaveShape` parameters (phase / amplitude /
-    /// frequency / bumpHeight / bumpWidth) deliberately match the ones
-    /// `waterShapeMask(...)` uses, so the dual-layer text color split stays
-    /// pixel-perfect on the visible waterline.
+    /// Layer 2 water rendering: transparent rich-blue body + meniscus-edge
+    /// liquid glass (refracts submerged title near the wave crest) + depth
+    /// and crest highlights. `WaveShape` parameters match `waterShapeMask`.
     private func waterFillView(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
         let baseAmplitude: CGFloat = hydrationLevel > 0 ? 4 : 0
         let waveAmplitude: CGFloat = baseAmplitude + sloshAmplitude
@@ -504,62 +637,18 @@ struct ContentView: View {
                 let wavePhase = timeline.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: 4) / 4
 
-                let bodyShape = WaveShape(
-                    phase: wavePhase, amplitude: waveAmplitude,
-                    frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
+                LiquidGlassWaterStack(
+                    waterColor: richWaterColor,
+                    wavePhase: wavePhase,
+                    amplitude: waveAmplitude,
+                    bumpHeight: bumpHeight,
+                    bodyHeight: totalHeight
                 )
-                let crestShape = WaveCrestShape(
-                    phase: wavePhase, amplitude: waveAmplitude,
-                    frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
-                )
-
-                ZStack(alignment: .top) {
-                    bodyShape
-                        .fill(theme.waterColor)
-
-                    // Vertical depth: surface a touch lighter, bottom darker.
-                    LinearGradient(
-                        stops: [
-                            .init(color: Color.white.opacity(0.06), location: 0.0),
-                            .init(color: Color.clear, location: 0.25),
-                            .init(color: Color.black.opacity(0.14), location: 1.0)
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                    .clipShape(bodyShape)
-
-                    // Subsurface glow — fakes light penetration ~6pt below the crest.
-                    crestShape
-                        .stroke(Color.white.opacity(0.10), lineWidth: 10)
-                        .blur(radius: 6)
-                        .offset(y: 6)
-                        .clipShape(bodyShape)
-
-                    // Specular sheen — bright crisp line riding the waterline.
-                    crestShape
-                        .stroke(Color.white.opacity(0.32), lineWidth: 1)
-                        .blur(radius: 0.4)
-                }
             }
             .frame(height: max(0, totalHeight))
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
-    }
-
-    /// Interpolates between dehydrated and hydrated visuals over the 5s transition.
-    private func hydrationVisual(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        ZStack {
-            DehydratedView()
-                .opacity(1 - hydrationLevel)
-            HydratedView()
-                .opacity(hydrationLevel)
-
-            if showStats {
-                statsOverlay(screenHeight: screenHeight, bumpHeight: bumpHeight)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: hydrationLevel)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Stats overlay
@@ -1316,9 +1405,7 @@ private struct UnlockThemeSheet: View {
     }
 }
 
-/// Single carousel card. Only renders the two ingredients the user cares
-/// about: the theme name (display + Chinese, top-left) and the live water
-/// wave (animated via TimelineView, ~50% fill).
+/// Single carousel card — theme name (layer 1) + liquid-glass water (layer 2).
 private struct ThemePreviewCard: View {
     let themeID: ThemeID
 
@@ -1331,36 +1418,39 @@ private struct ThemePreviewCard: View {
             let cardHeight = geo.size.height
             let waterHeight = cardHeight * waterFraction
 
-            ZStack {
-                theme.dehydratedBackground
+            GlassEffectContainer {
+                ZStack {
+                    theme.dehydratedBackground
 
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    TimelineView(.animation) { timeline in
-                        let wavePhase = timeline.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: 4) / 4
-                        WaveShape(
-                            phase: wavePhase,
-                            amplitude: 4,
-                            frequency: 1.5,
-                            bumpHeight: 0,
-                            bumpWidth: 0.18
-                        )
-                        .fill(theme.waterColor)
+                    // Layer 1: theme name beneath the water (same as main UI).
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(themeID.displayName)
+                            .font(themeID.previewNameFont)
+                            .foregroundStyle(theme.headerPrimary)
+                        Text(themeID.nameChinese)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(theme.headerSecondary)
                     }
-                    .frame(height: waterHeight)
-                }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(24)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(themeID.displayName)
-                        .font(themeID.previewNameFont)
-                        .foregroundStyle(theme.headerPrimary)
-                    Text(themeID.nameChinese)
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(theme.headerSecondary)
+                    // Layer 2: shared liquid-glass wave stack.
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        TimelineView(.animation) { timeline in
+                            let wavePhase = timeline.date.timeIntervalSinceReferenceDate
+                                .truncatingRemainder(dividingBy: 4) / 4
+                            LiquidGlassWaterStack(
+                                waterColor: themeID.richWaterColor,
+                                wavePhase: wavePhase,
+                                amplitude: 4,
+                                bumpHeight: 0,
+                                bodyHeight: waterHeight
+                            )
+                        }
+                        .frame(height: waterHeight)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(24)
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
