@@ -7,20 +7,6 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-private struct ButtonFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
-private struct HeaderFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
 /// Shared surface formula used by `WaveShape` (closed body) and
 /// `WaveCrestShape` (open top line). Keeps the two paths pixel-identical.
 @inline(__always)
@@ -129,7 +115,6 @@ struct WaveCrestShape: Shape {
 struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
     @State private var buttonFrame: CGRect = .zero
-    @State private var headerFrame: CGRect = .zero
     @State private var sloshAmplitude: CGFloat = 0
     @State private var showStats = false
     @State private var showVolumeSheet = false
@@ -145,13 +130,24 @@ struct ContentView: View {
     /// Convenience pass-through to the view-model's live hydration value.
     private var hydrationLevel: Double { viewModel.hydrationLevel }
 
+    /// Decides the status-bar glyph polarity from both inputs and applies it.
+    /// Glyphs must be light (white) whenever the surface behind them is dark —
+    /// which is true when the device is in Dark Mode (the dehydrated backdrop
+    /// is dark) OR when water has risen over the status bar (both themes'
+    /// `waterColor` is dark). In Light Mode with no water over the bar, glyphs
+    /// stay dark against the light cream / stone backdrop.
+    private func applyStatusBar(waterCovers: Bool) {
+        let lightGlyphs = viewModel.colorScheme == .dark || waterCovers
+        setStatusBarLightContent(lightGlyphs)
+    }
+
     /// Swaps the key window's `overrideUserInterfaceStyle` between `.dark`
-    /// (water covers status bar → trait collection becomes dark → status
-    /// bar reads as `.lightContent`, glyphs render in white) and `.light`
-    /// (everywhere else — also pins the app to its intended light identity
-    /// so users on system-wide Dark Mode still see the cream / stone
-    /// themes). Animated so the trait swap fades in lockstep with the
-    /// water rising past the safe-area inset rather than snapping.
+    /// (light status-bar glyphs) and `.light` (dark glyphs). This drives the
+    /// status bar *only*; theme colors are resolved explicitly from the
+    /// captured system scheme (`viewModel.colorScheme`), so flipping the
+    /// window trait here never affects which palette the app renders.
+    /// Animated so the trait swap fades in lockstep with the water rising
+    /// past the safe-area inset rather than snapping.
     private func setStatusBarLightContent(_ light: Bool) {
         let target: UIUserInterfaceStyle = light ? .dark : .light
         let keyWindow = UIApplication.shared.connectedScenes
@@ -182,6 +178,12 @@ struct ContentView: View {
             let bumpH: CGFloat = hydrationLevel > 0 && buttonFrame != .zero
                 ? max(0, waterSurfaceY - buttonFrame.midY + 10)
                 : 0
+            let baseAmplitude: CGFloat = hydrationLevel > 0 ? 4 : 0
+            let waveAmplitude: CGFloat = baseAmplitude + sloshAmplitude
+            // Match `waterFillView`: the visible crest sits above the nominal
+            // fill line by wave amplitude + bump, so button swaps track the
+            // real water top — not the flat percentage line alone.
+            let waterTopY = waterSurfaceY - waveAmplitude * 2 - bumpH
 
             // Status bar glyph polarity follows the background colour behind
             // them. Both themes' `waterColor` is dark (Default: deep blue,
@@ -195,17 +197,18 @@ struct ContentView: View {
             let statusBarThreshold = max(0, statusBarBottom - 6)
             let waterCoversStatusBar = waterSurfaceY <= statusBarThreshold
 
-            // Whether the water has actually risen high enough to cover the
-            // control-row buttons. Drives the dehydrated ↔ on-water color
-            // swap for the sip button, the two side buttons, and the
-            // "Last sip" caption. Using `buttonFrame.midY` means the swap
-            // happens once roughly half the button is underwater, which feels
-            // like the right moment perceptually — earlier than this the
-            // translucent on-water styles would be unreadable against the
-            // exposed dehydrated background (the very bug we're fixing).
-            let buttonsOnWater: Bool = hydrationLevel > 0
-                && buttonFrame != .zero
-                && waterSurfaceY <= buttonFrame.midY
+            // Top-right glass buttons: layout-math centre + wave crest offset.
+            let headerGlassCenterY = geometry.safeAreaInsets.top + 62 + 30
+            let sipCountOnWater = hydrationLevel > 0 && waterTopY <= headerGlassCenterY
+
+            // Control row + "Last sip": swap when the nominal fill line crosses the
+            // centre log button. Preference frames were unreliable with Liquid
+            // Glass, so fall back to layout math (stable bottom chrome insets).
+            let estimatedLogButtonMidY = screenHeight
+                - geometry.safeAreaInsets.bottom
+                - 104 // 36 bottom + ~20 caption + 16 gap + ~32 half log button
+            let logButtonMidY = buttonFrame != .zero ? buttonFrame.midY : estimatedLogButtonMidY
+            let buttonsOnWater = hydrationLevel > 0 && waterSurfaceY <= logButtonMidY
 
             ZStack(alignment: .bottom) {
                 ZStack(alignment: .bottom) {
@@ -217,21 +220,19 @@ struct ContentView: View {
                 .blur(radius: showStats ? 20 : 0)
 
                 VStack(spacing: 0) {
-                    stickyHeader(screenHeight: screenHeight, bumpHeight: bumpH)
-                        .background(
-                            GeometryReader { headerGeo in
-                                Color.clear.preference(
-                                    key: HeaderFrameKey.self,
-                                    value: headerGeo.frame(in: .named("root"))
-                                )
-                            }
-                        )
+                    stickyHeader(
+                        screenHeight: screenHeight,
+                        bumpHeight: bumpH
+                    )
                     hydrationVisual(screenHeight: screenHeight, bumpHeight: bumpH)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     controlRow(buttonsOnWater: buttonsOnWater)
                     bottomBar(onWater: buttonsOnWater)
                         .padding(.top, 16)
                         .padding(.bottom, 36)
+                }
+                .overlay(alignment: .topTrailing) {
+                    headerGlassButtons(onWater: sipCountOnWater)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, geometry.safeAreaInsets.top + 62)
@@ -251,26 +252,36 @@ struct ContentView: View {
             // hangs off of.
             //
             // The cost of dropping the modifier is that SwiftUI's
-            // `\.colorScheme` env value now follows the window's trait
-            // collection (it was hard-pinned to `.light` before). We force
-            // it back to `.light` on the few system surfaces that care
-            // (`SipVolumeSheet`); `ContentView` itself only uses explicit
-            // theme colours so it's unaffected, and `ThemeGalleryView`
-            // already pins itself to `.preferredColorScheme(.dark)`.
+            // `\.colorScheme` env value follows the window's trait collection,
+            // which `applyStatusBar(waterCovers:)` flips for the glyph trick.
+            // `ContentView` doesn't read `\.colorScheme` — it renders from the
+            // palette resolved against the *system* scheme (`viewModel.theme`
+            // / `viewModel.colorScheme`), so the window flip can't drag the UI
+            // into the wrong palette. System surfaces that DO read the trait
+            // pin themselves to the system scheme (`SipVolumeSheet`), and
+            // `ThemeGalleryView` pins itself to `.dark`.
             .onChange(of: waterCoversStatusBar) { _, covers in
-                setStatusBarLightContent(covers)
+                applyStatusBar(waterCovers: covers)
+            }
+            .onChange(of: viewModel.colorScheme) { _, _ in
+                applyStatusBar(waterCovers: waterCoversStatusBar)
             }
             .onAppear {
-                setStatusBarLightContent(waterCoversStatusBar)
+                applyStatusBar(waterCovers: waterCoversStatusBar)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
-        .onPreferenceChange(ButtonFrameKey.self) { buttonFrame = $0 }
-        .onPreferenceChange(HeaderFrameKey.self) { headerFrame = $0 }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                // Refresh both hydration state and the system color scheme.
+                // A live Control-Center Dark Mode toggle while foregrounded is
+                // picked up on the next activation (same cadence as
+                // `SipVolumeSheet`).
+                viewModel.updateColorScheme(WaterStateViewModel.currentSystemScheme())
                 viewModel.refreshFromStorage()
+            } else if phase == .background {
+                AppIconCoordinator.reconcileIfNeeded()
             }
         }
         .overlay {
@@ -285,6 +296,8 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            viewModel.updateColorScheme(WaterStateViewModel.currentSystemScheme())
+            AppIconCoordinator.bootstrapIfNeeded()
             if !hasSeenWelcome {
                 showWelcome = true
             }
@@ -296,7 +309,11 @@ struct ContentView: View {
                 SharedStorage.sipVolumeML = newVolume
             }
         }
-        .fullScreenCover(isPresented: $showThemePicker) {
+        .fullScreenCover(isPresented: $showThemePicker, onDismiss: {
+            let theme = SharedStorage.selectedThemeID
+            SharedStorage.reloadWidgetsForThemeChange()
+            AppIconCoordinator.schedulePostDismissReinforces(for: theme)
+        }) {
             ThemeGalleryView(
                 appliedID: viewModel.theme.id,
                 unlockedIDs: viewModel.unlockedThemeIDs,
@@ -312,63 +329,51 @@ struct ContentView: View {
         lastLogText(onWater: onWater)
     }
 
-    private func stickyHeader(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        // `.top` alignment keeps the close (✕) button at the same Y position as
-        // the sip-count number it replaces: `headerTitleAndCount`'s HStack is
-        // sized by the taller title+subtitle VStack, so the sip count (sitting
-        // at the top of that HStack) is higher than the center of the outer
-        // ZStack. Without explicit `.top` here, the close button would render
-        // centered against the title block and visibly shift downward when the
-        // stats overlay opens.
-        ZStack(alignment: .top) {
-            // Title text + sip-count number get the dual-layer water mask so
-            // the color split tracks the wave as it rises/falls through them.
-            ZStack {
-                headerTitleAndCount(
-                    primary: theme.headerPrimary,
-                    secondary: theme.headerSecondary,
-                    countColor: theme.statsPrimary
-                )
+    private func stickyHeader(
+        screenHeight: CGFloat,
+        bumpHeight: CGFloat
+    ) -> some View {
+        // Title text keeps the dual-layer water mask so the color split
+        // tracks the wave as it rises/falls through it. The sip-count and
+        // close buttons live in `headerGlassButtons` (a sibling overlay) so
+        // their Liquid Glass styling isn't affected by the masked title stack.
+        ZStack {
+            headerTitleBlock(
+                primary: theme.headerPrimary,
+                secondary: theme.headerSecondary
+            )
 
-                headerTitleAndCount(
-                    primary: theme.headerPrimaryOnWater,
-                    secondary: theme.headerSecondaryOnWater,
-                    countColor: theme.headerPrimaryOnWater
-                )
-                .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight))
-            }
-
-            // Close (✕) button uses the same dual-layer + blurred water-mask
-            // treatment as the stats text it belongs to (see `statsOverlay`):
-            // a dehydrated base in `statsPrimary` (dark) plus an on-water
-            // overlay in `statsPrimaryOnWater` (light) masked by the wave
-            // shape with a 30pt blur. The blur intentionally bleeds the
-            // color split across the thin xmark strokes so the glyph reads
-            // as a soft gradient as the wave rises/falls through it — same
-            // visual language as the sip-count number and stats text.
-            ZStack {
-                HStack {
-                    Spacer()
-                    closeButton(color: theme.statsPrimary)
-                }
-
-                HStack {
-                    Spacer()
-                    closeButton(color: theme.statsPrimaryOnWater)
-                }
-                .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight).blur(radius: 30))
-                .allowsHitTesting(false)
-            }
-            .opacity(showStats ? 1 : 0)
-            .allowsHitTesting(showStats)
+            headerTitleBlock(
+                primary: theme.headerPrimaryOnWater,
+                secondary: theme.headerSecondaryOnWater
+            )
+            .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight))
         }
         .padding(.vertical, 8)
     }
 
-    /// Renders the title block (Aqua/Sip + 水/飲, top-left) and the sip-count
-    /// number (top-right). The close (✕) button is intentionally NOT included
-    /// — see `stickyHeader` for why it's rendered separately.
-    private func headerTitleAndCount(primary: Color, secondary: Color, countColor: Color) -> some View {
+    /// Sip-count + close (✕) glass buttons, top-right. Sits in a `VStack`
+    /// overlay — same visual slot as before, but outside `stickyHeader` so
+    /// frame tracking and glass polarity match the control-row buttons.
+    private func headerGlassButtons(onWater: Bool) -> some View {
+        ZStack {
+            sipCountButton(onWater: onWater)
+                .opacity(showStats ? 0 : 1)
+                .allowsHitTesting(!showStats)
+
+            closeButton(onWater: onWater)
+                .opacity(showStats ? 1 : 0)
+                .allowsHitTesting(showStats)
+        }
+        .padding(.top, 8)
+    }
+
+    /// Renders the title block (Aqua/Sip + 水/飲, top-left) only. The sip-count
+    /// number and the close (✕) button are intentionally NOT included — both
+    /// are rendered separately in `stickyHeader` (the count as a standalone
+    /// Liquid Glass button, the close with its own dual-layer water mask) so
+    /// they aren't duplicated by this block's dual-layer treatment.
+    private func headerTitleBlock(primary: Color, secondary: Color) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(headerTitle)
@@ -384,41 +389,59 @@ struct ContentView: View {
             .opacity(showStats ? 0 : 1)
 
             Spacer()
-
-            Button {
-                withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
-                    showStats.toggle()
-                }
-            } label: {
-                Text("\(viewModel.todaySipCount)")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .contentTransition(.numericText())
-                    .foregroundStyle(countColor)
-                    .frame(height: 27, alignment: .center)
-                    .opacity(showStats ? 0 : 1)
-            }
-            .buttonStyle(.plain)
         }
     }
 
-    /// Close (✕) button rendered in a given color. Used twice by
-    /// `stickyHeader` to build the dual-layer water-mask treatment — see
-    /// the comment there for the full story. The 27pt frame matches the
-    /// sip-count `Text` it visually replaces so the two share the same
-    /// hit target and Y position.
-    private func closeButton(color: Color) -> some View {
+    /// Standalone Liquid Glass sip-count button (top-right). Tapping toggles
+    /// the stats overlay. Over water, `.glass` + dark color scheme + white
+    /// content (Text needs an explicit foreground; SF Symbols use tint).
+    /// The numeral label is a fixed 20×20 slot at 24pt for a single digit; two or
+    /// more digits scale down inside the same slot so the glass button never grows.
+    private func sipCountButton(onWater: Bool) -> some View {
+        let count = viewModel.todaySipCount
+        let isSingleDigit = count < 10
+
+        return Button {
+            withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
+                showStats.toggle()
+            }
+        } label: {
+            Text("\(count)")
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(onWater ? .white : .primary)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(isSingleDigit ? 1.0 : 0.3)
+                .allowsTightening(!isSingleDigit)
+                .frame(width: 20, height: 20)
+        }
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .liquidGlassCircleStyle(onWater: onWater)
+        .accessibilityLabel("Show stats")
+        .animation(.easeInOut(duration: 0.35), value: onWater)
+    }
+
+    /// Close (✕) Liquid Glass button. Crossfades in place with the sip-count
+    /// button when the stats overlay is open. Same size/build as the side
+    /// buttons (20pt glyph in a 20×20 label, `.large`).
+    private func closeButton(onWater: Bool) -> some View {
         Button {
             withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
                 showStats.toggle()
             }
         } label: {
             Image(systemName: "xmark")
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(color)
-                .frame(height: 27, alignment: .center)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(onWater ? .white : .primary)
+                .frame(width: 20, height: 20)
         }
-        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .liquidGlassCircleStyle(onWater: onWater)
         .accessibilityLabel("Close stats")
+        .animation(.easeInOut(duration: 0.35), value: onWater)
     }
 
     /// Title shown top-left, driven by current hydration state.
@@ -678,14 +701,10 @@ struct ContentView: View {
         return f
     }()
 
-    /// Primary "log a sip" button. Color identity is keyed to whether water
-    /// is currently covering the control row:
-    /// - **Below water (`onWater == false`)**: solid `waterColor` background
-    ///   + white droplet → reads as a strong CTA on the dehydrated cream/
-    ///   stone canvas, which is exactly when the user most needs to be
-    ///   prompted to drink.
-    /// - **Submerged (`onWater == true`)**: theme's `buttonPrimary*` pair
-    ///   (white bg + tinted droplet) → high contrast against the water fill.
+    /// Primary "log a sip" button, rendered as a Liquid Glass circle so the
+    /// water reads through it. Over water, `.glass` + dark scheme + white tint.
+    /// When dehydrated on the default theme, the droplet is explicitly
+    /// `waterColor` (blue) instead of the adaptive black glass glyph.
     private func logWaterButton(onWater: Bool) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -699,41 +718,49 @@ struct ContentView: View {
             Self.sipSoundPlayer?.play()
         } label: {
             Image(systemName: "drop.fill")
-                .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(onWater ? theme.buttonPrimaryForeground : .white)
-                .padding(20)
-                .background(
-                    onWater ? theme.buttonPrimaryBackground : theme.waterColor,
-                    in: Circle()
-                )
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(logDropForeground(onWater: onWater))
+                .frame(width: 30, height: 30)
         }
-        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .controlSize(.extraLarge)
+        .liquidGlassCircleStyle(onWater: onWater)
         .accessibilityLabel("I drank water")
         .animation(.easeInOut(duration: 0.35), value: onWater)
+    }
+
+    /// Droplet color for the log-sip glass button: white over water; default
+    /// theme blue on the dehydrated canvas; other themes keep the adaptive glyph.
+    private func logDropForeground(onWater: Bool) -> Color {
+        if onWater { return .white }
+        if theme.id == .default { return theme.waterColor }
+        return .primary
     }
 
     // MARK: - Bottom control row (volume / sip / theme)
 
     /// Horizontal row of three buttons: sip-volume (left), log-sip (center,
-    /// primary), theme-switch (right). The center button keeps the geometry
-    /// reader so the water bump tracks it. `buttonsOnWater` is threaded down
-    /// from `body` so all three buttons swap their color pair in unison at
-    /// the moment water actually crosses the row.
+    /// primary), theme-switch (right). The two flanking buttons are pushed to
+    /// the leading/trailing edges (via `Spacer`s) while the center primary
+    /// button stays horizontally centered — matching the spread layout in the
+    /// design. The center button keeps the geometry reader so the water bump
+    /// tracks it.
     private func controlRow(buttonsOnWater: Bool) -> some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 0) {
             sipVolumeButton(onWater: buttonsOnWater)
                 .opacity(showStats ? 0 : 1)
                 .allowsHitTesting(!showStats)
 
+            Spacer(minLength: 0)
+
             logWaterButton(onWater: buttonsOnWater)
-                .background(
-                    GeometryReader { btnGeo in
-                        Color.clear.preference(
-                            key: ButtonFrameKey.self,
-                            value: btnGeo.frame(in: .named("root"))
-                        )
-                    }
-                )
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .named("root"))
+                } action: { newFrame in
+                    buttonFrame = newFrame
+                }
+
+            Spacer(minLength: 0)
 
             themeSwitchButton(onWater: buttonsOnWater)
                 .opacity(showStats ? 0 : 1)
@@ -753,7 +780,7 @@ struct ContentView: View {
 
     private func themeSwitchButton(onWater: Bool) -> some View {
         secondaryCircleButton(
-            systemImage: "circle.righthalf.filled",
+            systemImage: "paintpalette",
             accessibilityLabel: "Change theme",
             onWater: onWater
         ) {
@@ -761,10 +788,9 @@ struct ContentView: View {
         }
     }
 
-    /// Shared style for the two flanking circle buttons. Picks the subtle
-    /// gray-on-overlay pair when the button is on the dehydrated background
-    /// (so it stays visible without competing with the central sip button)
-    /// and the translucent-white pair when water has risen over the row.
+    /// Shared style for the two flanking Liquid Glass circle buttons. Over
+    /// water, `.glass` + dark scheme + white tint. Sized as a 20pt glyph in a
+    /// 20×20 label, `.large`.
     private func secondaryCircleButton(
         systemImage: String,
         accessibilityLabel: String,
@@ -773,18 +799,44 @@ struct ContentView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(onWater ? theme.buttonForegroundOnWater : theme.buttonSubtleForeground)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(onWater ? .white : .primary)
                 .frame(width: 20, height: 20)
-                .padding(14)
-                .background(
-                    onWater ? theme.buttonBackgroundOnWater : theme.buttonSubtleBackground,
-                    in: Circle()
-                )
         }
-        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .liquidGlassCircleStyle(onWater: onWater)
         .accessibilityLabel(accessibilityLabel)
         .animation(.easeInOut(duration: 0.35), value: onWater)
+    }
+}
+
+/// Resting Liquid Glass circle buttons: light `.glass` + light color scheme on
+/// the dehydrated background (dark glyphs); over water, `.glass` + dark scheme
+/// + white tint so the material reads dark and glyphs stay white. Both branches
+/// pin an explicit `\.colorScheme` so the window-level status-bar trait flip
+/// can't drag buttons into the wrong polarity.
+/// `.glassProminent` was tried but paints an opaque white fill — do not use.
+private struct LiquidGlassCircleButtonStyle: ViewModifier {
+    let onWater: Bool
+
+    func body(content: Content) -> some View {
+        if onWater {
+            content
+                .buttonStyle(.glass)
+                .environment(\.colorScheme, .dark)
+                .tint(.white)
+        } else {
+            content
+                .buttonStyle(.glass)
+                .environment(\.colorScheme, .light)
+        }
+    }
+}
+
+private extension View {
+    func liquidGlassCircleStyle(onWater: Bool) -> some View {
+        modifier(LiquidGlassCircleButtonStyle(onWater: onWater))
     }
 }
 
@@ -827,16 +879,21 @@ struct SipVolumeSheet: View {
                 Spacer()
 
                 HStack(spacing: 24) {
+                    // Liquid Glass stepper controls — matches the sheet's
+                    // glass save button and the gallery's glass chrome.
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
                             volume = max(70, volume - 10)
                         }
                     } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(isAtMinimum ? Color.blue.opacity(0.3) : .blue)
+                        Image(systemName: "minus")
+                            .font(.system(size: 22, weight: .semibold))
+                            .frame(width: 30, height: 30)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .tint(.blue)
                     .disabled(isAtMinimum)
 
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
@@ -854,11 +911,14 @@ struct SipVolumeSheet: View {
                             volume = min(500, volume + 10)
                         }
                     } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(.blue)
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .semibold))
+                            .frame(width: 30, height: 30)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .tint(.blue)
                 }
 
                 Text("Each sip")

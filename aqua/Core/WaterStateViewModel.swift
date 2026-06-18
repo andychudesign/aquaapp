@@ -21,8 +21,17 @@ final class WaterStateViewModel {
     /// Average sips/day over the previous 6 days (excludes today).
     private(set) var recentAverage: Double = 0
 
-    /// Active visual theme, synced from SharedStorage.
-    private(set) var theme: AppTheme = SharedStorage.currentTheme
+    /// System light/dark scheme the palette is currently resolved against.
+    /// Captured from the *screen* trait (see `currentSystemScheme()`), which is
+    /// unaffected by the key window's `overrideUserInterfaceStyle` that
+    /// `ContentView` toggles for the status-bar trick.
+    private(set) var colorScheme: ColorScheme = WaterStateViewModel.currentSystemScheme()
+
+    /// Active visual theme, resolved for the selected theme + system scheme.
+    private(set) var theme: AppTheme = AppTheme.forID(
+        SharedStorage.selectedThemeID,
+        scheme: WaterStateViewModel.currentSystemScheme()
+    )
 
     /// Theme IDs the user has unlocked (always includes `.default`).
     private(set) var unlockedThemeIDs: Set<ThemeID> = SharedStorage.unlockedThemeIDs
@@ -59,7 +68,7 @@ final class WaterStateViewModel {
             hydrationLevel = level
         }
         syncSipStats()
-        theme = SharedStorage.currentTheme
+        theme = AppTheme.forID(SharedStorage.selectedThemeID, scheme: colorScheme)
         unlockedThemeIDs = SharedStorage.unlockedThemeIDs
         if level > 0 {
             startRefreshTimerIfNeeded()
@@ -78,39 +87,26 @@ final class WaterStateViewModel {
             if saved {
                 let suite = UserDefaults(suiteName: SharedStorage.appGroupID)
                 suite?.set(true, forKey: "healthKitAuthResolved")
-                WidgetCenter.shared.reloadAllTimelines()
+                // Re-reload so the widget button rebinds to the background
+                // intent now that auth is resolved. Per-kind (not
+                // `reloadAllTimelines()`) to avoid over-charging the
+                // accessory widgets' reload budget — see `SharedStorage.logWater()`.
+                WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+                WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
             }
         }
     }
 
-    /// Apply a theme. Persists to shared storage, updates the in-memory
-    /// theme, and synchronously asks UIKit to swap the home-screen
-    /// alternate icon. **Must be called from the user-interaction context**
-    /// of the gallery's action-pill button — iOS 26.1+ shows the "App Icon
-    /// Changed" alert via SpringBoard's out-of-process overlay and only
-    /// posts it when the call originates from a user-action context. Any
-    /// async hop (`Task { @MainActor in ... }`, `DispatchQueue.main.asyncAfter`,
-    /// or `.fullScreenCover.onDismiss`) loses that hint and SpringBoard
-    /// silently suppresses the alert.
-    ///
-    /// Both themes map to *named* alternates (`Sip-Aqua` / `Sip-Kurosawa`),
-    /// never `nil` — see `ThemeID.alternateIconName` for the rationale.
+    /// Apply a theme. Persists to shared storage, updates the in-memory theme,
+    /// and asks `AppIconCoordinator` to swap the home-screen alternate icon.
+    /// **Must be called from the gallery action pill's `Button` action before
+    /// `dismiss()`** so iOS 26+ keeps the user-interaction context.
     func applyTheme(_ id: ThemeID) {
         let previousID = SharedStorage.selectedThemeID
-        SharedStorage.selectedThemeID = id
-        theme = SharedStorage.currentTheme
+        SharedStorage.writeSelectedThemeID(id)
+        theme = AppTheme.forID(id, scheme: colorScheme)
         guard previousID != id else { return }
-        let app = UIApplication.shared
-        guard app.supportsAlternateIcons else {
-            print("[Aqua] supportsAlternateIcons = false; skipping icon swap")
-            return
-        }
-        let desired = id.alternateIconName
-        app.setAlternateIconName(desired) { error in
-            if let error {
-                print("[Aqua] setAlternateIconName(\(desired)) failed: \(error)")
-            }
-        }
+        AppIconCoordinator.applyUserThemeChange(to: id)
     }
 
     /// Mark a theme as unlocked. Future StoreKit purchase flow should call this
@@ -118,6 +114,28 @@ final class WaterStateViewModel {
     func unlockTheme(_ id: ThemeID) {
         SharedStorage.unlock(id)
         unlockedThemeIDs = SharedStorage.unlockedThemeIDs
+    }
+
+    /// Re-resolve the active palette for a new system color scheme. Called by
+    /// `ContentView` on appear and whenever the scene becomes active (matching
+    /// the cadence `SipVolumeSheet` already uses), so the app follows the
+    /// device's Light/Dark setting.
+    func updateColorScheme(_ scheme: ColorScheme) {
+        guard scheme != colorScheme else { return }
+        colorScheme = scheme
+        theme = AppTheme.forID(SharedStorage.selectedThemeID, scheme: scheme)
+    }
+
+    /// Reads the device's *system* light/dark preference from the scene's
+    /// screen trait, which the key window's `overrideUserInterfaceStyle`
+    /// (used by `ContentView` for the status-bar adaptation) does not affect —
+    /// the override mutates only the window's trait, not the screen's.
+    static func currentSystemScheme() -> ColorScheme {
+        let style = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .screen.traitCollection.userInterfaceStyle ?? .light
+        return style == .dark ? .dark : .light
     }
 
     private func syncSipStats() {

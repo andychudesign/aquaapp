@@ -136,6 +136,31 @@ enum SharedStorage {
         dateString(daysAgo: 0)
     }
 
+    // MARK: - Per-day lookups (Siri day queries)
+
+    /// `yyyy-MM-dd` key for an arbitrary date (matches the history format).
+    static func dateKey(for date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    /// Sip count for a specific day. Today uses the live counter; earlier days
+    /// come from the 7-day history (returns 0 outside that window).
+    static func sipCount(on dateString: String) -> Int {
+        if dateString == todayDateString { return todaySipCount }
+        return sipHistory[dateString] ?? 0
+    }
+
+    /// Volume in mL for a specific day. Today is the accumulated actual total;
+    /// earlier days are *estimated* as count × the current per-sip volume — no
+    /// per-day volume history is persisted, matching the same estimation
+    /// convention the app already uses as a migration fallback.
+    static func estimatedVolumeML(on dateString: String) -> Int {
+        if dateString == todayDateString { return todayTotalVolumeML }
+        return sipCount(on: dateString) * sipVolumeML
+    }
+
     private static func dateString(daysAgo: Int) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -154,9 +179,41 @@ enum SharedStorage {
             return id
         }
         set {
-            suite?.set(newValue.rawValue, forKey: selectedThemeKey)
-            WidgetCenter.shared.reloadAllTimelines()
+            writeSelectedThemeID(newValue)
+            reloadWidgetsForThemeChange()
         }
+    }
+
+    /// Persist the theme id without reloading widgets — used when an icon
+    /// swap is still in flight so WidgetKit work doesn't race SpringBoard.
+    static func writeSelectedThemeID(_ id: ThemeID) {
+        suite?.set(id.rawValue, forKey: selectedThemeKey)
+    }
+
+    /// Last theme whose alternate icon SpringBoard acknowledged. Do not use
+    /// `UIApplication.alternateIconName` as the source of truth — on iOS 26/27
+    /// it can disagree with the home screen, Spotlight, and App Library.
+    private static let iconSyncedThemeKey = "iconSyncedThemeID"
+
+    static var iconSyncedThemeID: ThemeID? {
+        get {
+            guard let raw = suite?.string(forKey: iconSyncedThemeKey),
+                  let id = ThemeID(rawValue: raw) else { return nil }
+            return id
+        }
+        set {
+            if let newValue {
+                suite?.set(newValue.rawValue, forKey: iconSyncedThemeKey)
+            } else {
+                suite?.removeObject(forKey: iconSyncedThemeKey)
+            }
+        }
+    }
+
+    /// Per-kind widget reload after a theme change (matches sip-logging sites).
+    static func reloadWidgetsForThemeChange() {
+        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
+        WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
     }
 
     static var currentTheme: AppTheme {
@@ -199,11 +256,11 @@ enum SharedStorage {
         suite?.set(hydrationLevel(), forKey: "fillStartLevel")
         lastWaterLogTime = Date()
         incrementSipCount()
-        // Reload all widget kinds, then re-issue per-kind reloads —
-        // `reloadAllTimelines()` is sometimes coalesced away for the
-        // accessory (lock-screen) widget on iOS 26, leaving it stuck on
-        // the pre-sip timeline while the home widget updates instantly.
-        WidgetCenter.shared.reloadAllTimelines()
+        // Reload each kind exactly once. See `LogWaterIntent.perform()` for
+        // why the redundant `reloadAllTimelines()` + duplicate per-kind calls
+        // were removed: they over-charged WidgetKit's per-widget reload
+        // budget and starved the lock-screen (accessory) widgets, leaving
+        // them frozen after multiple sips / with multiple widgets installed.
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
         WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
     }

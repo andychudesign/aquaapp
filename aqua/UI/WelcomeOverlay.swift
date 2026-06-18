@@ -33,14 +33,20 @@ private struct WelcomeWaveShape: Shape {
 private struct ProgressBar: View {
     var progress: Double
     var onWater: Bool
+    var theme: AppTheme
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
+                // Dehydrated track/fill are theme-driven so the bar stays
+                // legible in Dark Mode (the dark palette's `headerPrimary` is
+                // light, inverting the near-black fill that would otherwise
+                // vanish on the dark backdrop). The light-mode look is
+                // effectively unchanged (near-black fill on a faint track).
                 Capsule()
-                    .fill(onWater ? Color.white.opacity(0.35) : Color(white: 0.82))
+                    .fill(onWater ? Color.white.opacity(0.35) : theme.headerPrimary.opacity(0.18))
                 Capsule()
-                    .fill(onWater ? Color.white : Color(white: 0.15))
+                    .fill(onWater ? Color.white : theme.headerPrimary)
                     .frame(width: max(6, geo.size.width * progress))
             }
         }
@@ -79,7 +85,7 @@ struct WelcomeView: View {
 
                 // Foreground content
                 VStack(spacing: 0) {
-                    ProgressBar(progress: progress, onWater: onWater)
+                    ProgressBar(progress: progress, onWater: onWater, theme: theme)
                         .padding(.top, 78)
                         .animation(.easeInOut(duration: 0.8), value: onWater)
 

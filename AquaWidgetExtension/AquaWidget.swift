@@ -51,24 +51,28 @@ struct LogWaterIntent: AppIntent {
         suite?.set(previousLevel, forKey: "fillStartLevel")
         suite?.set(Date(), forKey: "lastWaterLogTime")
         Self.incrementSipCount(suite: suite)
-        // Reload both widget kinds explicitly. `reloadAllTimelines()` *should*
-        // cover both, but iOS 26 has been observed to silently defer the
-        // accessory (lock-screen) widget's reload — leaving it stuck on the
-        // pre-sip timeline while the home widget updates immediately.
-        // Explicit per-kind calls are more reliable for the lock-screen
-        // surface; we keep `reloadAllTimelines()` as a belt-and-suspenders
-        // catch-all.
-        WidgetCenter.shared.reloadAllTimelines()
-        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
-        WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
         let saved = await HealthKitManager.saveSip(requestAuth: false)
         if saved {
             suite?.set(true, forKey: "healthKitAuthResolved")
         }
-        // Re-issue the lock-screen reload after the await — the first
-        // request can land while the intent is still suspended on the
-        // HealthKit save, and iOS sometimes coalesces it away for
-        // accessory widgets.
+        // Reload each widget kind exactly once, after all shared state is
+        // committed (including the HealthKit auth flag, which decides which
+        // intent the button binds to).
+        //
+        // The home widget that owns the tapped button is auto-reloaded by
+        // WidgetKit when this intent returns; the lock-screen (accessory)
+        // widgets do not contain the button, so they depend entirely on
+        // these explicit reloads — which are metered by WidgetKit's
+        // per-widget reload budget.
+        //
+        // Previously this site charged the accessory budget 3× per sip
+        // (`reloadAllTimelines()` + two `reloadTimelines(ofKind:)` calls).
+        // With two lock-screen widgets installed and several sips logged in
+        // quick succession, the budget was exhausted almost immediately and
+        // subsequent accessory reloads were silently dropped, freezing the
+        // lock-screen water level/status. A single charge per kind keeps the
+        // reliable per-kind delivery while leaving ample budget headroom.
+        WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
         WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
         return .result()
     }
@@ -305,29 +309,46 @@ struct AquaWidgetView: View {
     var entry: AquaWidgetEntry
     @Environment(\.widgetFamily) var family
     @Environment(\.widgetRenderingMode) var renderingMode
+    @Environment(\.colorScheme) private var colorScheme
+    // Default content margins, reapplied manually to the text/button after the
+    // widget opts out of automatic margins (so the water can bleed edge-to-edge
+    // as content while the chrome keeps its original inset).
+    @Environment(\.widgetContentMargins) private var contentMargins
 
-    private var theme: AppTheme { .forID(entry.themeID) }
+    /// The palette is resolved for the widget's color scheme, so Dark Mode
+    /// uses each theme's real dark palette (dark backdrop + light-leaning
+    /// content) rather than a one-off override. The off-water content colors
+    /// (`headerPrimary`, `statsPrimary`, etc.) are already light in the dark
+    /// palette, so they stay legible on the dark backdrop without any
+    /// scheme-specific branching here.
+    private var theme: AppTheme { .forID(entry.themeID, scheme: colorScheme) }
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
-    private var headerOnWater: Bool { entry.hydrationLevel > 0.75 }
+    private var headerOnWater: Bool { entry.hydrationLevel >= 0.80 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
     private var isTinted: Bool { renderingMode == .accented }
 
     private var headerColor: Color {
-        headerOnWater
-            ? (isTinted ? Color(white: 0.1) : theme.headerPrimaryOnWater)
-            : (isTinted ? Color.primary : theme.headerPrimary)
+        if headerOnWater {
+            return isTinted ? Color(white: 0.1) : theme.headerPrimaryOnWater
+        }
+        // Below 80 % the header sits over the light glass / dehydrated backdrop.
+        // `Color.primary` is system-tinted white in accented (Liquid Glass) mode,
+        // so always use the theme's explicit off-water colors here.
+        return theme.headerPrimary
     }
 
     private var headerSecondaryColor: Color {
-        headerOnWater
-            ? (isTinted ? Color(white: 0.1, opacity: 0.5) : theme.headerSecondaryOnWater)
-            : (isTinted ? Color.secondary : theme.headerSecondary)
+        if headerOnWater {
+            return isTinted ? Color(white: 0.1, opacity: 0.5) : theme.headerSecondaryOnWater
+        }
+        return theme.headerSecondary
     }
 
     private var sipCountColor: Color {
-        headerOnWater
-            ? (isTinted ? Color(white: 0.1) : theme.headerPrimaryOnWater)
-            : (isTinted ? Color.primary : theme.statsPrimary)
+        if headerOnWater {
+            return isTinted ? Color(white: 0.1) : theme.headerPrimaryOnWater
+        }
+        return theme.statsPrimary
     }
 
     /// Title font for the widget header. Mirrors `ThemeID.headerTitleFont` in
@@ -353,66 +374,48 @@ struct AquaWidgetView: View {
         }
     }
 
-    // MARK: Small
+    // MARK: Small / Medium (shared)
 
-    private var smallView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 4) {
-                Text(isHydrated ? "Aqua" : "Sip")
-                    .font(titleFont)
-                    .foregroundStyle(headerColor)
-                Text(isHydrated ? "水" : "飲")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(headerSecondaryColor)
+    // The small and medium home widgets share one layout. The water is widget
+    // *content* (not the container background) so it survives — and gets
+    // system-tinted like any other content — when the user's tinted/clear Home
+    // Screen appearance makes WidgetKit swap our backdrop for adaptive glass.
+    private var smallView: some View { homeView }
+    private var mediumView: some View { homeView }
+
+    private var homeView: some View {
+        ZStack(alignment: .bottom) {
+            waterFill
+                .widgetAccentable()
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 4) {
+                    Text(isHydrated ? "Aqua" : "Sip")
+                        .font(titleFont)
+                        .foregroundStyle(headerColor)
+                    Text(isHydrated ? "水" : "飲")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(headerSecondaryColor)
+
+                    Spacer()
+
+                    Text("\(entry.sipCount)")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(sipCountColor)
+                        .contentTransition(.numericText())
+                }
+                .contentTransition(.interpolate)
 
                 Spacer()
 
-                Text("\(entry.sipCount)")
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(headerColor)
-                    .contentTransition(.numericText())
+                HStack {
+                    Spacer()
+                    drinkButton
+                }
             }
-            .contentTransition(.interpolate)
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                drinkButton
-            }
+            .padding(contentMargins)
         }
-        .containerBackground(for: .widget) { waterFillBackground }
-    }
-
-    // MARK: Medium
-
-    private var mediumView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 4) {
-                Text(isHydrated ? "Aqua" : "Sip")
-                    .font(titleFont)
-                    .foregroundStyle(headerColor)
-                Text(isHydrated ? "水" : "飲")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(headerSecondaryColor)
-
-                Spacer()
-
-                Text("\(entry.sipCount)")
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(headerColor)
-                    .contentTransition(.numericText())
-            }
-            .contentTransition(.interpolate)
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                drinkButton
-            }
-        }
-        .containerBackground(for: .widget) { waterFillBackground }
+        .containerBackground(for: .widget) { widgetBackground }
     }
 
     // MARK: Accessory
@@ -456,22 +459,26 @@ struct AquaWidgetView: View {
 
     // MARK: Drink button
 
+    private var buttonForegroundColor: Color {
+        if isTinted {
+            return buttonOnWater ? Color(white: 0.1) : Color.primary
+        }
+        return buttonOnWater ? theme.buttonForegroundOnWater : theme.buttonForeground
+    }
+
+    private var buttonBackgroundColor: Color {
+        if isTinted {
+            return buttonOnWater ? Color(white: 0.1).opacity(0.25) : Color.primary.opacity(0.15)
+        }
+        return buttonOnWater ? theme.buttonBackgroundOnWater : theme.buttonBackground
+    }
+
     private var drinkButtonLabel: some View {
         Image(systemName: "drop.fill")
             .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(
-                buttonOnWater
-                    ? (isTinted ? Color(white: 0.1) : theme.buttonForegroundOnWater)
-                    : (isTinted ? Color.primary : theme.buttonForeground)
-            )
+            .foregroundStyle(buttonForegroundColor)
             .padding(10)
-            .background(
-                Circle().fill(
-                    buttonOnWater
-                        ? (isTinted ? Color(white: 0.1).opacity(0.25) : theme.buttonBackgroundOnWater)
-                        : (isTinted ? Color.primary.opacity(0.15) : theme.buttonBackground)
-                )
-            )
+            .background(Circle().fill(buttonBackgroundColor))
     }
 
     @ViewBuilder
@@ -487,32 +494,56 @@ struct AquaWidgetView: View {
         .contentTransition(.interpolate)
     }
 
-    // MARK: Water-fill background
+    // MARK: Water fill (widget content) + backdrop (container background)
 
-    /// The actual rising-water animation is driven by the **timeline**:
-    /// `AquaTimelineProvider.getTimeline` emits 5 sub-second entries during
-    /// the post-sip ramp window with stepped hydration levels (0%, 25%, 50%,
-    /// 75%, 100%), and WidgetKit walks through them in order. Each entry is
-    /// rendered statically by this view — no `TimelineView(.animation)`,
-    /// no `.animation(value:)` modifier — because both of those approaches
-    /// were tried and neither produces a real fill animation in widget
-    /// process context. See the comment on the ramp loop in `getTimeline`
-    /// for the full history.
-    private var waterFillBackground: some View {
+    /// The rising water level. This is now widget **content**, anchored to the
+    /// bottom and bleeding edge-to-edge (the widget opts out of automatic
+    /// content margins via `.contentMarginsDisabled()`). Keeping it as content
+    /// — rather than inside `containerBackground` — is what lets the water
+    /// survive when WidgetKit removes the backdrop and substitutes its glass
+    /// material for tinted/clear Home Screen appearances; in those modes the
+    /// system tints this shape just like every other widget's content.
+    ///
+    /// The actual rising animation is driven by the **timeline**:
+    /// `AquaTimelineProvider.getTimeline` emits sub-second entries during the
+    /// post-sip ramp window with stepped hydration levels, and WidgetKit walks
+    /// through them in order. Each entry is rendered statically here — no
+    /// `TimelineView(.animation)`, no `.animation(value:)` — because neither
+    /// produces a real fill animation in widget process context. See the ramp
+    /// loop in `getTimeline` for the full history.
+    private var waterFill: some View {
         GeometryReader { geo in
             let waveHeadroom: CGFloat = entry.hydrationLevel > 0 ? 8 : 0
             let waterHeight = geo.size.height * entry.hydrationLevel + waveHeadroom
             let wavePhase = entry.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4
 
-            ZStack(alignment: .bottom) {
-                theme.dehydratedBackground
-                    .widgetAccentable()
-
-                WidgetWaveShape(phase: wavePhase)
-                    .fill(theme.waterColor)
-                    .frame(height: max(0, waterHeight))
-            }
+            WidgetWaveShape(phase: wavePhase)
+                .fill(theme.waterColor)
+                // Tinted/clear Home Screen appearances system-tint all content
+                // white, so an opaque water fill matches the header + button and
+                // vanishes. 70 % transparency keeps the level readable.
+                .opacity(isTinted ? 0.3 : 1)
+                .frame(height: max(0, waterHeight))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
+    }
+
+    /// The widget backdrop behind the water. Declared inside
+    /// `containerBackground(for: .widget)` (and the widget no longer calls
+    /// `.containerBackgroundRemovable(false)`), so WidgetKit **removes this and
+    /// substitutes its own adaptive glass material** — light glass in Light
+    /// Mode, dark glass in Dark Mode, showing the wallpaper through it — the
+    /// moment the user's Home Screen uses a tinted or clear (Liquid Glass)
+    /// appearance. That's the Batteries-widget look and it's entirely
+    /// system-driven; we don't (and can't) paint the wallpaper ourselves.
+    ///
+    /// In the **default full-color** appearance the system does *not* show the
+    /// wallpaper through third-party widgets, so this solid backdrop shows
+    /// instead. `theme.dehydratedBackground` is already the dark palette's
+    /// near-black panel in Dark Mode, so it supports Dark Mode without a
+    /// scheme-specific override.
+    private var widgetBackground: some View {
+        theme.dehydratedBackground
     }
 }
 
@@ -528,7 +559,12 @@ struct SipHomeWidget: Widget {
         .configurationDisplayName("Hydration")
         .description("Log your sip and stay hydrated.")
         .supportedFamilies([.systemSmall, .systemMedium])
-        .containerBackgroundRemovable(false)
+        // Opt *in* to background removal (no `containerBackgroundRemovable(false)`)
+        // so tinted/clear Home Screen appearances swap our backdrop for the
+        // system's adaptive Liquid Glass — the battery-widget look.
+        // Disable automatic content margins so the water fill bleeds
+        // edge-to-edge; the text/button reapply the system margins themselves.
+        .contentMarginsDisabled()
     }
 }
 

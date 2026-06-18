@@ -55,12 +55,11 @@ struct LogWaterAuthIntent: AppIntent {
         await HealthKitManager.saveSip(requestAuth: true)
         suite?.set(true, forKey: "healthKitAuthResolved")
 
-        // See `LogWaterIntent.perform()` and `SharedStorage.logWater()` for
-        // why we re-issue per-kind reloads: iOS 26 has been observed to
-        // silently coalesce away the accessory (lock-screen) widget reload
-        // when only `reloadAllTimelines()` is called from a widget intent
-        // path.
-        WidgetCenter.shared.reloadAllTimelines()
+        // Reload each kind exactly once. See `LogWaterIntent.perform()` for
+        // why the redundant `reloadAllTimelines()` + duplicate per-kind calls
+        // were removed: they over-charged WidgetKit's per-widget reload
+        // budget and starved the lock-screen (accessory) widgets, leaving
+        // them frozen after multiple sips / with multiple widgets installed.
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
         WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
         return .result()
