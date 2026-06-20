@@ -29,11 +29,11 @@ enum ThemeID: String, CaseIterable, Identifiable {
     /// Name of the alternate app icon bundled in the app target. Each theme
     /// maps to a *named* alternate (never `nil`), even the default look —
     /// iOS 26 has a known regression on the `setAlternateIconName(nil)`
-    /// path with Liquid Glass `.icon`-bundle alternates. By shipping
-    /// `Sip-Aqua.icon` as a duplicate of the primary `Sip.icon` and always
-    /// swapping between named alternates, both directions go through iOS's
-    /// normal alternate-to-alternate transition. Names must match
-    /// `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`.
+    /// path with Liquid Glass `.icon`-bundle alternates. `Sip-Aqua.icon`
+    /// matches the primary look but must **not** be byte-identical to
+    /// `Sip.icon` — SpringBoard treats a primary-equivalent alternate as a
+    /// broken revert when switching back from `Sip-Kurosawa`. Names must
+    /// match `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`.
     var alternateIconName: String {
         switch self {
         case .default:  return "Sip-Aqua"

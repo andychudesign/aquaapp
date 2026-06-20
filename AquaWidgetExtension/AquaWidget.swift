@@ -16,43 +16,11 @@ private let hydrationDuration: TimeInterval = 7200
 struct LogWaterIntent: AppIntent {
     static let title: LocalizedStringResource = "I drank water"
 
-    private static func incrementSipCount(suite: UserDefaults?) {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        let today = f.string(from: Date())
-        let stored = suite?.string(forKey: "todaySipCountDate")
-        let isNewDay = stored != today
-        let current = isNewDay ? 0 : (suite?.integer(forKey: "todaySipCount") ?? 0)
-        suite?.set(current + 1, forKey: "todaySipCount")
-        suite?.set(today, forKey: "todaySipCountDate")
-
-        let storedVol = suite?.integer(forKey: "sipVolumeML") ?? 0
-        let sipML = storedVol > 0 ? storedVol : 70
-        let previousVolume: Int
-        if isNewDay {
-            previousVolume = 0
-        } else if let vol = suite?.object(forKey: "todayTotalVolumeML") as? Int {
-            previousVolume = vol
-        } else {
-            previousVolume = current * 70
-        }
-        suite?.set(previousVolume + sipML, forKey: "todayTotalVolumeML")
-    }
-
     func perform() async throws -> some IntentResult {
-        let suite = UserDefaults(suiteName: appGroupID)
-        let previousLevel: Double
-        if let logTime = suite?.object(forKey: "lastWaterLogTime") as? Date {
-            let elapsed = Date().timeIntervalSince(logTime)
-            previousLevel = max(0, min(1, 1 - elapsed / hydrationDuration))
-        } else {
-            previousLevel = 0
-        }
-        suite?.set(previousLevel, forKey: "fillStartLevel")
-        suite?.set(Date(), forKey: "lastWaterLogTime")
-        Self.incrementSipCount(suite: suite)
+        SharedStorage.recordSip()
         let saved = await HealthKitManager.saveSip(requestAuth: false)
         if saved {
+            let suite = UserDefaults(suiteName: appGroupID)
             suite?.set(true, forKey: "healthKitAuthResolved")
         }
         // Reload each widget kind exactly once, after all shared state is

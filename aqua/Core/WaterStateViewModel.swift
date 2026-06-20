@@ -42,12 +42,16 @@ final class WaterStateViewModel {
     /// Accumulated mL consumed today (actual per-sip volumes, not retroactive).
     private(set) var todayVolumeML: Int = SharedStorage.todayTotalVolumeML
 
+    /// Achievement progress rows for the stats overlay (v1.5+).
+    private(set) var achievements: [AchievementProgress] = SharedStorage.allAchievementProgress()
+
     private var refreshTimer: Timer?
 
     var isFullyDehydrated: Bool { hydrationLevel <= 0 }
     var isTransitioning: Bool { hydrationLevel > 0 && hydrationLevel < 1 }
 
     init() {
+        SharedStorage.runAchievementsV15MigrationIfNeeded()
         hydrationLevel = SharedStorage.hydrationLevel()
         syncSipStats()
         startRefreshTimerIfNeeded()
@@ -114,6 +118,7 @@ final class WaterStateViewModel {
     func unlockTheme(_ id: ThemeID) {
         SharedStorage.unlock(id)
         unlockedThemeIDs = SharedStorage.unlockedThemeIDs
+        syncSipStats()
     }
 
     /// Re-resolve the active palette for a new system color scheme. Called by
@@ -144,6 +149,7 @@ final class WaterStateViewModel {
         recentAverage = SharedStorage.previous6DayAverage
         sipVolumeML = SharedStorage.sipVolumeML
         todayVolumeML = SharedStorage.todayTotalVolumeML
+        achievements = SharedStorage.allAchievementProgress()
     }
 
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.

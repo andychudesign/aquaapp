@@ -78,13 +78,13 @@
           "fill-specializations" : [
             {
               "value" : {
-                "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+                "solid" : "extended-srgb:0.00000,0.53334,1.00000,1.00000"
               }
             },
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+                "solid" : "extended-srgb:0.00000,0.53334,1.00000,1.00000"
               }
             },
             {
@@ -108,11 +108,11 @@
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.501
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.5
+        "value" : 0.501
       }
     }
   ],

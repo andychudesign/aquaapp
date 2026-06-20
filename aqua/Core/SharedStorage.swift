@@ -51,11 +51,17 @@ enum SharedStorage {
 
     /// Increment the daily sip count and accumulate actual volume.
     /// Resets if the stored date isn't today.
-    /// Also records the count in the 7-day history dictionary.
+    /// Also records the count in the 7-day history dictionary and updates
+    /// lifetime achievement counters (v1.5+).
     static func incrementSipCount() {
         let today = todayDateString
         let stored = suite?.string(forKey: sipCountDateKey)
         let isNewDay = stored != today
+
+        if isNewDay, let previousDay = stored, !previousDay.isEmpty {
+            finalizeSevenSipStreak(forCompletedDay: previousDay)
+        }
+
         let current = isNewDay ? 0 : (suite?.integer(forKey: sipCountKey) ?? 0)
         let newCount = current + 1
         suite?.set(newCount, forKey: sipCountKey)
@@ -76,6 +82,13 @@ enum SharedStorage {
         let validKeys = Set((0..<7).map { dateString(daysAgo: $0) })
         history = history.filter { validKeys.contains($0.key) }
         suite?.set(history, forKey: sipHistoryKey)
+
+        recordLoggedDay(today)
+        incrementLifetimeSipCount()
+        if newCount == 7 {
+            registerSevenSipQualifiedDay(today)
+        }
+        evaluateSipAchievements()
     }
 
     // MARK: - 7-day sip history
@@ -247,15 +260,88 @@ enum SharedStorage {
         var current = unlockedThemeIDs
         current.insert(id)
         unlockedThemeIDs = current
+        if id == .kurosawa {
+            evaluateKurosawaAchievement()
+        }
+    }
+
+    // MARK: - Achievements (v1.5+)
+
+    private static let achievementsV15MigratedKey = "achievementsV15Migrated"
+    private static let lifetimeSipCountKey = "lifetimeSipCount"
+    private static let loggedDayKeysKey = "loggedDayKeys"
+    private static let sevenSipConsecutiveDaysKey = "sevenSipConsecutiveDays"
+    private static let sevenSipLastQualifiedDayKey = "sevenSipLastQualifiedDay"
+    private static let achievementUnlockDatesKey = "achievementUnlockDates"
+    private static let achievementLegacyUnlocksKey = "achievementLegacyUnlocks"
+
+    /// Total sips logged since v1.5 achievement tracking began.
+    static var lifetimeSipCount: Int {
+        suite?.integer(forKey: lifetimeSipCountKey) ?? 0
+    }
+
+    /// Distinct calendar days with at least one sip since v1.5 tracking began.
+    static var loggedDayCount: Int {
+        loggedDayKeys.count
+    }
+
+    /// Current consecutive-day streak where each day had at least 7 sips.
+    static var sevenSipConsecutiveDays: Int {
+        suite?.integer(forKey: sevenSipConsecutiveDaysKey) ?? 0
+    }
+
+    /// Run once on first launch after updating to v1.5. Backfills the Kurosawa
+    /// achievement for users who unlocked in v1.4 without a recorded date.
+    static func runAchievementsV15MigrationIfNeeded() {
+        guard suite?.bool(forKey: achievementsV15MigratedKey) != true else { return }
+        suite?.set(true, forKey: achievementsV15MigratedKey)
+        if isUnlocked(.kurosawa) {
+            markAchievementLegacyUnlocked(.unlockKurosawa)
+        }
+    }
+
+    /// Progress for every achievement, ordered for display.
+    static func allAchievementProgress() -> [AchievementProgress] {
+        AchievementID.allCases.map { progress(for: $0) }
+    }
+
+    static func progress(for id: AchievementID) -> AchievementProgress {
+        let unlockDisplay = unlockDisplay(for: id)
+        let current: Int
+        if unlockDisplay != .inProgress {
+            current = id.target
+        } else {
+            switch id {
+            case .unlockKurosawa:
+                current = isUnlocked(.kurosawa) ? 1 : 0
+            case .total100Sips:
+                current = min(lifetimeSipCount, id.target)
+            case .sevenConsecutiveSevenSipDays:
+                current = min(sevenSipConsecutiveDays, id.target)
+            case .fiftyLoggedDays, .hundredLoggedDays:
+                current = min(loggedDayCount, id.target)
+            }
+        }
+        return AchievementProgress(
+            id: id,
+            current: current,
+            target: id.target,
+            unlockDisplay: unlockDisplay
+        )
     }
 
     // MARK: - Log water
 
-    /// Record that the user just drank water.
-    static func logWater() {
+    /// Persists a sip (hydration + counters + achievements). Does not reload widgets.
+    static func recordSip() {
         suite?.set(hydrationLevel(), forKey: "fillStartLevel")
         lastWaterLogTime = Date()
         incrementSipCount()
+    }
+
+    /// Record that the user just drank water.
+    static func logWater() {
+        recordSip()
         // Reload each kind exactly once. See `LogWaterIntent.perform()` for
         // why the redundant `reloadAllTimelines()` + duplicate per-kind calls
         // were removed: they over-charged WidgetKit's per-widget reload
@@ -263,5 +349,112 @@ enum SharedStorage {
         // them frozen after multiple sips / with multiple widgets installed.
         WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
         WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
+    }
+
+    // MARK: - Achievement internals
+
+    private static var loggedDayKeys: Set<String> {
+        let stored = suite?.array(forKey: loggedDayKeysKey) as? [String] ?? []
+        return Set(stored)
+    }
+
+    private static func setLoggedDayKeys(_ keys: Set<String>) {
+        suite?.set(Array(keys).sorted(), forKey: loggedDayKeysKey)
+    }
+
+    private static func recordLoggedDay(_ dayKey: String) {
+        var keys = loggedDayKeys
+        keys.insert(dayKey)
+        setLoggedDayKeys(keys)
+    }
+
+    private static func incrementLifetimeSipCount() {
+        suite?.set(lifetimeSipCount + 1, forKey: lifetimeSipCountKey)
+    }
+
+    private static func registerSevenSipQualifiedDay(_ dayKey: String) {
+        let lastQualified = suite?.string(forKey: sevenSipLastQualifiedDayKey)
+        guard lastQualified != dayKey else { return }
+
+        let yesterday = dateString(daysAgo: 1)
+        let streak: Int
+        if lastQualified == yesterday {
+            streak = sevenSipConsecutiveDays + 1
+        } else {
+            streak = 1
+        }
+        suite?.set(streak, forKey: sevenSipConsecutiveDaysKey)
+        suite?.set(dayKey, forKey: sevenSipLastQualifiedDayKey)
+    }
+
+    /// Called when the calendar day rolls over — resets the streak if the day
+    /// that just ended did not reach 7 sips.
+    private static func finalizeSevenSipStreak(forCompletedDay dayKey: String) {
+        let count = sipCount(on: dayKey)
+        if count < 7 {
+            suite?.set(0, forKey: sevenSipConsecutiveDaysKey)
+            if suite?.string(forKey: sevenSipLastQualifiedDayKey) == dayKey {
+                suite?.removeObject(forKey: sevenSipLastQualifiedDayKey)
+            }
+        }
+    }
+
+    private static func evaluateSipAchievements() {
+        if lifetimeSipCount >= AchievementID.total100Sips.target {
+            recordAchievementUnlock(.total100Sips)
+        }
+        if loggedDayCount >= AchievementID.fiftyLoggedDays.target {
+            recordAchievementUnlock(.fiftyLoggedDays)
+        }
+        if loggedDayCount >= AchievementID.hundredLoggedDays.target {
+            recordAchievementUnlock(.hundredLoggedDays)
+        }
+        if sevenSipConsecutiveDays >= AchievementID.sevenConsecutiveSevenSipDays.target {
+            recordAchievementUnlock(.sevenConsecutiveSevenSipDays)
+        }
+        evaluateKurosawaAchievement()
+    }
+
+    private static func evaluateKurosawaAchievement() {
+        guard isUnlocked(.kurosawa) else { return }
+        if isAchievementLegacyUnlocked(.unlockKurosawa) {
+            return
+        }
+        recordAchievementUnlock(.unlockKurosawa)
+    }
+
+    private static func unlockDisplay(for id: AchievementID) -> AchievementUnlockDisplay {
+        if let date = achievementUnlockDate(for: id) {
+            return .achieved(on: date)
+        }
+        if isAchievementLegacyUnlocked(id) {
+            return .achievedLegacy
+        }
+        return .inProgress
+    }
+
+    private static func achievementUnlockDate(for id: AchievementID) -> Date? {
+        let map = suite?.dictionary(forKey: achievementUnlockDatesKey) as? [String: Double] ?? [:]
+        guard let interval = map[id.rawValue] else { return nil }
+        return Date(timeIntervalSince1970: interval)
+    }
+
+    private static func isAchievementLegacyUnlocked(_ id: AchievementID) -> Bool {
+        let stored = suite?.array(forKey: achievementLegacyUnlocksKey) as? [String] ?? []
+        return stored.contains(id.rawValue)
+    }
+
+    private static func markAchievementLegacyUnlocked(_ id: AchievementID) {
+        var stored = suite?.array(forKey: achievementLegacyUnlocksKey) as? [String] ?? []
+        guard !stored.contains(id.rawValue) else { return }
+        stored.append(id.rawValue)
+        suite?.set(stored, forKey: achievementLegacyUnlocksKey)
+    }
+
+    private static func recordAchievementUnlock(_ id: AchievementID, date: Date = Date()) {
+        var map = suite?.dictionary(forKey: achievementUnlockDatesKey) as? [String: Double] ?? [:]
+        guard map[id.rawValue] == nil else { return }
+        map[id.rawValue] = date.timeIntervalSince1970
+        suite?.set(map, forKey: achievementUnlockDatesKey)
     }
 }

@@ -51,7 +51,9 @@ struct WaveShape: Shape {
         let headroom = amplitude * 2 + bumpHeight
         path.move(to: CGPoint(x: 0, y: headroom))
 
-        for x in stride(from: 0, through: w, by: 1) {
+        // Stride by 2 — halves path tessellation cost with no visible change on
+        // a smooth sine surface at phone/tablet widths.
+        for x in stride(from: 0, through: w, by: 2) {
             let t: CGFloat = x / w
             let y = waveSurfaceY(
                 t: t, phase: phase, amplitude: amplitude,
@@ -61,6 +63,12 @@ struct WaveShape: Shape {
             path.addLine(to: CGPoint(x: x, y: y))
         }
 
+        let endY = waveSurfaceY(
+            t: 1, phase: phase, amplitude: amplitude,
+            frequency: frequency, bumpHeight: bumpHeight,
+            bumpWidth: bumpWidth, headroom: headroom
+        )
+        path.addLine(to: CGPoint(x: w, y: endY))
         path.addLine(to: CGPoint(x: w, y: rect.maxY))
         path.addLine(to: CGPoint(x: 0, y: rect.maxY))
         path.closeSubpath()
@@ -93,7 +101,7 @@ struct WaveCrestShape: Shape {
 
         let headroom = amplitude * 2 + bumpHeight
         var started = false
-        for x in stride(from: 0, through: w, by: 1) {
+        for x in stride(from: 0, through: w, by: 2) {
             let t: CGFloat = x / w
             let y = waveSurfaceY(
                 t: t, phase: phase, amplitude: amplitude,
@@ -108,6 +116,14 @@ struct WaveCrestShape: Shape {
                 started = true
             }
         }
+        if started {
+            let endY = waveSurfaceY(
+                t: 1, phase: phase, amplitude: amplitude,
+                frequency: frequency, bumpHeight: bumpHeight,
+                bumpWidth: bumpWidth, headroom: headroom
+            )
+            path.addLine(to: CGPoint(x: w, y: endY))
+        }
         return path
     }
 }
@@ -119,14 +135,80 @@ private enum LiquidGlassWaterMetrics {
     static let meniscusTintOpacity = 0.52
 }
 
+/// Full-screen stats scrim — blurred canvas underneath, white type on top.
+private enum StatsOverlayMetrics {
+    static let scrimOpacity = 0.40
+    static let backgroundBlur: CGFloat = 26
+    static let horizontalPadding: CGFloat = 16
+    /// Matches layer-3 `padding(.top, safeArea + headerChromeTopInset)`.
+    static let headerChromeTopInset: CGFloat = 62
+    /// Matches `headerGlassButtons` inner `.padding(.top, 8)`.
+    static let headerGlassTopPadding: CGFloat = 8
+    /// Scroll content top inset — lines up with the ✕ / sip-count row.
+    static var statsContentTopInset: CGFloat { headerChromeTopInset + headerGlassTopPadding }
+    /// `.controlSize(.large)` liquid-glass circle (sip count + close).
+    static let headerGlassButtonSize: CGFloat = 44
+    /// Line height for `sectionFont` — centres the first stats line on the ✕.
+    static let sectionLineHeight: CGFloat = 26
+
+    /// Top padding so the first stats line is vertically centred on the ✕.
+    static func statsScrollTopPadding(safeAreaTop: CGFloat) -> CGFloat {
+        safeAreaTop + statsContentTopInset
+            + (headerGlassButtonSize - sectionLineHeight) / 2
+            + 4
+    }
+    static let primaryText = Color.white
+    static let secondaryText = Color.white.opacity(0.6)
+    static let sectionFont = Font.system(size: 22, weight: .medium, design: .default)
+    static let bodyFont = Font.system(size: 17, weight: .medium, design: .default)
+    static let detailFont = Font.system(size: 15, weight: .medium, design: .default)
+    static let edgeFadeHeight: CGFloat = 72
+    static let bottomEdgeFadeHeight: CGFloat = 48
+    /// Vertical gap between core stats block and Achievements section.
+    static let statsToAchievementsSpacing: CGFloat = 65
+    /// Mini 7-day chart bar thickness (vertical capsule width).
+    static let miniChartBarThickness: CGFloat = 3
+    /// Achievement progress track — 40 % of text-column width, same thickness as chart bars.
+    static let achievementProgressBarWidthFraction: CGFloat = 0.4
+}
+
+/// Full-screen achievement detail — fade over stats, horizontal paging.
+private enum AchievementDetailMetrics {
+    static let detailCupSize: CGFloat = 234
+    static let cupToDetailsSpacing: CGFloat = 32
+    static let scrimOpacity: Double = 0.90
+    static let fadeAnimation: Animation = .easeInOut(duration: 0.32)
+}
+
 private extension ThemeID {
     /// Layer-2 water body colour — `#0089E6` for default; Kurosawa charcoal.
-    var richWaterColor: Color {
+    func richWaterColor(scheme: ColorScheme) -> Color {
         switch self {
         case .default:
             return Color(red: 0x00 / 255.0, green: 0x89 / 255.0, blue: 0xE6 / 255.0)
         case .kurosawa:
-            return Color(white: 0.06)
+            // Light mode: near-black base — at 50 % opacity on stone it washed out.
+            return scheme == .light ? Color(white: 0.04) : Color(white: 0.06)
+        }
+    }
+
+    /// Layer-2 fill opacity. Kurosawa light needs a higher alpha so charcoal
+    /// reads dark over the warm stone backdrop; default stays translucent blue.
+    func richWaterBodyOpacity(scheme: ColorScheme) -> Double {
+        switch self {
+        case .default:  return LiquidGlassWaterMetrics.bodyOpacity
+        case .kurosawa: return scheme == .light ? 0.78 : LiquidGlassWaterMetrics.bodyOpacity
+        }
+    }
+
+    /// Solid water colour for theme-gallery preview cards only.
+    var previewWaterColor: Color {
+        switch self {
+        case .default:
+            return Color(red: 0x00 / 255.0, green: 0xA9 / 255.0, blue: 0xEF / 255.0)
+        case .kurosawa:
+            // Approximates Kurosawa light-mode water on stone (0.04 @ 78 %).
+            return Color(red: 0x2E / 255.0, green: 0x2D / 255.0, blue: 0x2B / 255.0)
         }
     }
 }
@@ -165,6 +247,7 @@ private struct MeniscusGlassBand: View {
 /// Transparent tinted wave body + meniscus glass + depth/crest highlights.
 private struct LiquidGlassWaterStack: View {
     let waterColor: Color
+    let bodyOpacity: Double
     let wavePhase: Double
     let amplitude: CGFloat
     let bumpHeight: CGFloat
@@ -183,7 +266,7 @@ private struct LiquidGlassWaterStack: View {
 
         ZStack(alignment: .top) {
             bodyShape
-                .fill(waterColor.opacity(LiquidGlassWaterMetrics.bodyOpacity))
+                .fill(waterColor.opacity(bodyOpacity))
 
             MeniscusGlassBand(
                 waterColor: waterColor,
@@ -229,6 +312,22 @@ private struct LiquidGlassWaterStack: View {
     }
 }
 
+/// Lightweight gallery preview — solid fill + animated wave only.
+private struct ThemePreviewWaterStack: View {
+    let waterColor: Color
+    let wavePhase: Double
+    let amplitude: CGFloat
+    let bumpHeight: CGFloat
+
+    var body: some View {
+        WaveShape(
+            phase: wavePhase, amplitude: amplitude,
+            frequency: 1.5, bumpHeight: bumpHeight, bumpWidth: 0.18
+        )
+        .fill(waterColor)
+    }
+}
+
 struct ContentView: View {
     @State private var viewModel = WaterStateViewModel()
     @State private var buttonFrame: CGRect = .zero
@@ -238,6 +337,9 @@ struct ContentView: View {
     @State private var showThemePicker = false
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
     @State private var showWelcome = false
+    @State private var achievementDetailOpen = false
+    @State private var achievementDetailInitialID: AchievementID?
+    @State private var achievementDetailScrollID: AchievementID?
     @Environment(\.scenePhase) private var scenePhase
 
     /// Theme used to render the UI right now. Theme switching happens
@@ -247,7 +349,19 @@ struct ContentView: View {
     /// Convenience pass-through to the view-model's live hydration value.
     private var hydrationLevel: Double { viewModel.hydrationLevel }
 
-    private var richWaterColor: Color { theme.id.richWaterColor }
+    /// Pauses the live wave + liquid-glass stack when nothing needs it —
+    /// dehydrated, backgrounded, or covered by a sheet/gallery/welcome.
+    /// Stops the main UI from competing with gallery cards' own TimelineViews.
+    private var waterAnimationPaused: Bool {
+        hydrationLevel <= 0
+            || scenePhase != .active
+            || showThemePicker
+            || showVolumeSheet
+            || showWelcome
+    }
+
+    private var richWaterColor: Color { theme.id.richWaterColor(scheme: viewModel.colorScheme) }
+    private var richWaterBodyOpacity: Double { theme.id.richWaterBodyOpacity(scheme: viewModel.colorScheme) }
     /// Decides the status-bar glyph polarity from both inputs and applies it.
     /// Glyphs must be light (white) whenever the surface behind them is dark —
     /// which is true when the device is in Dark Mode (the dehydrated backdrop
@@ -341,9 +455,8 @@ struct ContentView: View {
 
                         bottomLayerTitle
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .padding(.horizontal, 16)
-                            .padding(.top, geometry.safeAreaInsets.top + 62)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, StatsOverlayMetrics.horizontalPadding)
+                            .padding(.top, headerTitleTopPadding(safeAreaTop: geometry.safeAreaInsets.top))
 
                         // Layer 2: animated translucent water body.
                         waterFillView(screenHeight: screenHeight, bumpHeight: bumpH)
@@ -351,23 +464,59 @@ struct ContentView: View {
                 }
                 .ignoresSafeArea()
                 .scaleEffect(showStats ? 1.1 : 1)
-                .blur(radius: showStats ? 20 : 0)
+                .blur(radius: showStats ? StatsOverlayMetrics.backgroundBlur : 0)
 
-                // Layer 3: interactive chrome — stats, buttons, last-sip caption.
-                VStack(spacing: 0) {
-                    headerLayoutSpacer
-                    topLayerCenter(screenHeight: screenHeight, bumpHeight: bumpH)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    controlRow(buttonsOnWater: buttonsOnWater)
-                    bottomBar(onWater: buttonsOnWater)
-                        .padding(.top, 16)
-                        .padding(.bottom, 36)
+                if showStats {
+                    Color.black.opacity(StatsOverlayMetrics.scrimOpacity)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
-                .overlay(alignment: .topTrailing) {
-                    headerGlassButtons(onWater: sipCountOnWater)
+
+                // Layer 3: interactive chrome — buttons + last-sip caption.
+                if !showStats {
+                    VStack(spacing: 0) {
+                        headerLayoutSpacer
+                        Spacer(minLength: 0)
+                        controlRow(buttonsOnWater: buttonsOnWater)
+                        bottomBar(onWater: buttonsOnWater)
+                            .padding(.top, 16)
+                            .padding(.bottom, 36)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        headerGlassButtons(onWater: sipCountOnWater)
+                    }
+                    .padding(.horizontal, StatsOverlayMetrics.horizontalPadding)
+                    .padding(.top, geometry.safeAreaInsets.top + StatsOverlayMetrics.headerChromeTopInset)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, geometry.safeAreaInsets.top + 62)
+            }
+            .overlay {
+                if showStats {
+                    statsFullScreenOverlay(
+                        safeAreaTop: geometry.safeAreaInsets.top,
+                        safeAreaBottom: geometry.safeAreaInsets.bottom
+                    )
+                    .transition(.opacity)
+                }
+            }
+            .overlay {
+                if showStats, achievementDetailOpen, let initialID = achievementDetailInitialID {
+                    achievementDetailOverlay(
+                        initialScrollID: initialID,
+                        safeAreaBottom: geometry.safeAreaInsets.bottom,
+                        screenSize: geometry.size
+                    )
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if showStats, !achievementDetailOpen {
+                    closeButton(statsOverlayOpen: true, onWater: sipCountOnWater)
+                        .padding(
+                            .top,
+                            geometry.safeAreaInsets.top + StatsOverlayMetrics.statsContentTopInset
+                        )
+                        .padding(.trailing, StatsOverlayMetrics.horizontalPadding)
+                }
             }
             .coordinateSpace(name: "root")
             // NB: we deliberately do **not** apply
@@ -392,6 +541,9 @@ struct ContentView: View {
             // into the wrong palette. System surfaces that DO read the trait
             // pin themselves to the system scheme (`SipVolumeSheet`), and
             // `ThemeGalleryView` pins itself to `.dark`.
+            .onChange(of: showStats) { _, open in
+                if !open { dismissAchievementDetail(immediate: true) }
+            }
             .onChange(of: waterCoversStatusBar) { _, covers in
                 applyStatusBar(waterCovers: covers)
             }
@@ -412,6 +564,7 @@ struct ContentView: View {
                 // `SipVolumeSheet`).
                 viewModel.updateColorScheme(WaterStateViewModel.currentSystemScheme())
                 viewModel.refreshFromStorage()
+                AppIconCoordinator.reconcileIfNeeded()
             } else if phase == .background {
                 AppIconCoordinator.reconcileIfNeeded()
             }
@@ -461,6 +614,17 @@ struct ContentView: View {
         lastLogText(onWater: onWater)
     }
 
+    /// Layer-1 title top inset — vertically centred on the sip-count / ✕ row.
+    private func headerTitleTopPadding(safeAreaTop: CGFloat) -> CGFloat {
+        StatsOverlayMetrics.statsScrollTopPadding(safeAreaTop: safeAreaTop)
+    }
+
+    /// Extra top inset inside layer 3 so `headerLayoutSpacer` matches layer 1.
+    private var headerTitleSpacerTopOffset: CGFloat {
+        StatsOverlayMetrics.statsScrollTopPadding(safeAreaTop: 0)
+            - StatsOverlayMetrics.headerChromeTopInset
+    }
+
     /// Layer 1 title — single dehydrated palette. The mid-layer liquid-glass
     /// water refracts this text when the fill rises over it.
     private var bottomLayerTitle: some View {
@@ -474,55 +638,215 @@ struct ContentView: View {
     /// vertical layout the old `stickyHeader` provided.
     private var headerLayoutSpacer: some View {
         headerTitleBlock(primary: .clear, secondary: .clear)
-            .padding(.vertical, 8)
+            .padding(.top, headerTitleSpacerTopOffset)
             .accessibilityHidden(true)
             .allowsHitTesting(false)
     }
 
-    /// Layer 3 centre — stats overlay only (title lives on layer 1).
-    private func topLayerCenter(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        ZStack {
-            if showStats {
-                statsOverlay(screenHeight: screenHeight, bumpHeight: bumpHeight)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+    // MARK: - Stats overlay
+
+    /// Edge-to-edge scroll surface with top/bottom fade masks. Sits above the
+    /// scrim so content is not cropped by the main-app header layout spacer.
+    private func statsFullScreenOverlay(
+        safeAreaTop: CGFloat,
+        safeAreaBottom: CGFloat
+    ) -> some View {
+        statsScrollContent(
+            safeAreaTop: safeAreaTop,
+            safeAreaBottom: safeAreaBottom
+        )
+        .blur(radius: achievementDetailOpen ? StatsOverlayMetrics.backgroundBlur : 0)
+        .animation(AchievementDetailMetrics.fadeAnimation, value: achievementDetailOpen)
+        .ignoresSafeArea()
+    }
+
+    private func achievementDetailOverlay(
+        initialScrollID: AchievementID,
+        safeAreaBottom: CGFloat,
+        screenSize: CGSize
+    ) -> some View {
+        AchievementDetailOverlay(
+            achievements: viewModel.achievements,
+            initialScrollID: initialScrollID,
+            scrollID: $achievementDetailScrollID,
+            screenSize: screenSize,
+            safeAreaBottom: safeAreaBottom,
+            cupImage: { AnyView(achievementCupImage(for: $0, detail: true)) },
+            onDismiss: { dismissAchievementDetail() }
+        )
+        .ignoresSafeArea()
+        .transition(.opacity)
+    }
+
+    private func openAchievementDetail(_ id: AchievementID) {
+        achievementDetailInitialID = id
+        achievementDetailScrollID = nil
+        withAnimation(AchievementDetailMetrics.fadeAnimation) {
+            achievementDetailOpen = true
+        }
+    }
+
+    private func dismissAchievementDetail(immediate: Bool = false) {
+        guard achievementDetailOpen else { return }
+
+        if immediate {
+            achievementDetailOpen = false
+            achievementDetailInitialID = nil
+            achievementDetailScrollID = nil
+            return
+        }
+
+        withAnimation(AchievementDetailMetrics.fadeAnimation) {
+            achievementDetailOpen = false
+        }
+        achievementDetailInitialID = nil
+        achievementDetailScrollID = nil
+    }
+
+    /// Shared cup artwork for list rows and the detail overlay.
+    @ViewBuilder
+    private func achievementCupImage(for progress: AchievementProgress, detail: Bool = false) -> some View {
+        let name = achievementCupAssetName(for: progress, detail: detail)
+        if Bundle.main.url(forResource: name, withExtension: "png") != nil
+            || UIImage(named: name) != nil {
+            Image(name)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.system(size: detail ? 72 : 28))
+                .foregroundStyle(
+                    progress.isComplete
+                        ? StatsOverlayMetrics.primaryText.opacity(0.85)
+                        : StatsOverlayMetrics.secondaryText.opacity(0.5)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// List thumbnails use `Achievement-<id>-{locked,unlocked}`; detail zoom
+    /// prefers `Achievement-<id>-{locked,unlocked}-detail`, falling back to list art.
+    private func achievementCupAssetName(for progress: AchievementProgress, detail: Bool) -> String {
+        let detailName = progress.isComplete
+            ? progress.id.unlockedDetailImageName
+            : progress.id.lockedDetailImageName
+        let listName = progress.isComplete
+            ? progress.id.unlockedImageName
+            : progress.id.lockedImageName
+        guard detail else { return listName }
+        if UIImage(named: detailName) != nil {
+            return detailName
+        }
+        return listName
+    }
+
+    private func statsScrollContent(safeAreaTop: CGFloat, safeAreaBottom: CGFloat) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: StatsOverlayMetrics.statsToAchievementsSpacing) {
+                statsSummarySection
+                achievementsSection
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, StatsOverlayMetrics.horizontalPadding)
+            .padding(.top, StatsOverlayMetrics.statsScrollTopPadding(safeAreaTop: safeAreaTop))
+            .padding(.bottom, safeAreaBottom + 32)
+        }
+        .scrollIndicators(.hidden)
+        .mask {
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [.clear, .black],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: StatsOverlayMetrics.edgeFadeHeight)
+
+                Rectangle().fill(.black)
+
+                LinearGradient(
+                    colors: [.black, .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: StatsOverlayMetrics.bottomEdgeFadeHeight)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: hydrationLevel)
     }
 
-    /// Sip-count + close (✕) glass buttons, top-right. Sits in a `VStack`
-    /// overlay — same visual slot as before, but outside `stickyHeader` so
-    /// frame tracking and glass polarity match the control-row buttons.
-    private func headerGlassButtons(onWater: Bool) -> some View {
-        ZStack {
-            sipCountButton(onWater: onWater)
-                .opacity(showStats ? 0 : 1)
-                .allowsHitTesting(!showStats)
+    private var statsSummarySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            statsMetricLine(
+                value: "\(viewModel.todaySipCount)",
+                suffix: "sip today"
+            )
 
-            closeButton(onWater: onWater)
-                .opacity(showStats ? 1 : 0)
-                .allowsHitTesting(showStats)
+            statsMetricLine(
+                value: "\(viewModel.todayVolumeML)",
+                suffix: "ml in total"
+            )
+
+            HStack(alignment: .center, spacing: 10) {
+                weeklyBarChart
+                averageLabel
+            }
         }
-        .padding(.top, 8)
     }
 
-    /// Renders the title block (Aqua/Sip + 水/飲, top-left) only. The sip-count
-    /// number and the close (✕) button live in `headerGlassButtons` so they
-    /// aren't duplicated here.
+    private func statsMetricLine(value: String, suffix: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(value)
+                .foregroundStyle(StatsOverlayMetrics.primaryText)
+                .contentTransition(.numericText())
+            Text(suffix)
+                .foregroundStyle(StatsOverlayMetrics.secondaryText)
+        }
+        .font(StatsOverlayMetrics.sectionFont)
+    }
+
+    private var achievementsSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Achievements")
+                    .foregroundStyle(StatsOverlayMetrics.primaryText)
+                Text("成就")
+                    .foregroundStyle(StatsOverlayMetrics.secondaryText)
+            }
+            .font(StatsOverlayMetrics.sectionFont)
+
+            VStack(spacing: 28) {
+                ForEach(viewModel.achievements) { achievement in
+                    AchievementRow(
+                        progress: achievement,
+                        cupImage: { achievementCupImage(for: achievement) },
+                        onTap: { openAchievementDetail(achievement.id) }
+                    )
+                }
+            }
+        }
+    }
+
+    private func headerGlassButtons(onWater: Bool) -> some View {
+        sipCountButton(onWater: onWater)
+            .padding(.top, StatsOverlayMetrics.headerGlassTopPadding)
+    }
+
+    /// Renders the title block (Aqua/Sip + 水/飲, top-left). The sip-count
+    /// button lives in `headerGlassButtons`; close (✕) is in `statsFullScreenOverlay`.
     private func headerTitleBlock(primary: Color, secondary: Color) -> some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(headerTitle)
-                    .font(theme.id.headerTitleFont)
+                    .font(theme.id.headerTitleLatinFont)
                     .foregroundStyle(primary)
                     .contentTransition(.opacity)
                 Text(headerSubtitle)
-                    .font(.title2)
-                    .fontWeight(.medium)
+                    .font(theme.id == .default
+                        ? theme.id.headerTitleLatinFont
+                        : .title2)
+                    .fontWeight(theme.id == .kurosawa ? .medium : nil)
                     .foregroundStyle(secondary)
                     .contentTransition(.opacity)
             }
-            .opacity(showStats ? 0 : 1)
 
             Spacer()
         }
@@ -560,22 +884,23 @@ struct ContentView: View {
     }
 
     /// Close (✕) Liquid Glass button. Crossfades in place with the sip-count
-    /// button when the stats overlay is open. Same size/build as the side
-    /// buttons (20pt glyph in a 20×20 label, `.large`).
-    private func closeButton(onWater: Bool) -> some View {
-        Button {
+    /// button when the stats overlay is open. Over the stats scrim, always
+    /// white on dark glass (ignores `onWater`).
+    private func closeButton(statsOverlayOpen: Bool, onWater: Bool) -> some View {
+        let glassOnWater = statsOverlayOpen || onWater
+        return Button {
             withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
                 showStats.toggle()
             }
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(onWater ? .white : .primary)
+                .foregroundStyle(glassOnWater ? .white : .primary)
                 .frame(width: 20, height: 20)
         }
         .buttonBorderShape(.circle)
         .controlSize(.large)
-        .liquidGlassCircleStyle(onWater: onWater)
+        .liquidGlassCircleStyle(onWater: glassOnWater)
         .accessibilityLabel("Close stats")
         .animation(.easeInOut(duration: 0.35), value: onWater)
     }
@@ -590,41 +915,9 @@ struct ContentView: View {
         hydrationLevel > 0 ? "水" : "飲"
     }
 
-    /// Mask that renders the exact same WaveShape as the water fill,
-    /// perfectly synced via TimelineView so the color split tracks every wave frame.
-    private func waterShapeMask(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        TimelineView(.animation(paused: hydrationLevel <= 0)) { timeline in
-            let wavePhase = timeline.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: 4) / 4
-            let baseAmplitude: CGFloat = hydrationLevel > 0 ? 4 : 0
-            let waveAmplitude: CGFloat = baseAmplitude + sloshAmplitude
-            let waterBase = screenHeight * hydrationLevel
-            let totalWaterHeight = waterBase + waveAmplitude * 2 + bumpHeight
-
-            GeometryReader { geo in
-                let frame = geo.frame(in: .named("root"))
-
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    WaveShape(
-                        phase: wavePhase,
-                        amplitude: waveAmplitude,
-                        frequency: 1.5,
-                        bumpHeight: bumpHeight,
-                        bumpWidth: 0.18
-                    )
-                    .fill(Color.white)
-                    .frame(height: max(0, totalWaterHeight))
-                }
-                .frame(width: geo.size.width, height: screenHeight, alignment: .bottom)
-                .offset(y: -frame.minY)
-            }
-        }
-    }
-
     /// Layer 2 water rendering: transparent rich-blue body + meniscus-edge
     /// liquid glass (refracts submerged title near the wave crest) + depth
-    /// and crest highlights. `WaveShape` parameters match `waterShapeMask`.
+    /// and crest highlights. `WaveShape` amplitude / phase / bump match the fill.
     private func waterFillView(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
         let baseAmplitude: CGFloat = hydrationLevel > 0 ? 4 : 0
         let waveAmplitude: CGFloat = baseAmplitude + sloshAmplitude
@@ -633,12 +926,13 @@ struct ContentView: View {
 
         return VStack(spacing: 0) {
             Spacer(minLength: 0)
-            TimelineView(.animation(paused: hydrationLevel <= 0)) { timeline in
+            TimelineView(.animation(paused: waterAnimationPaused)) { timeline in
                 let wavePhase = timeline.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: 4) / 4
 
                 LiquidGlassWaterStack(
                     waterColor: richWaterColor,
+                    bodyOpacity: richWaterBodyOpacity,
                     wavePhase: wavePhase,
                     amplitude: waveAmplitude,
                     bumpHeight: bumpHeight,
@@ -651,77 +945,26 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
-    // MARK: - Stats overlay
-
-    private func statsOverlay(screenHeight: CGFloat, bumpHeight: CGFloat) -> some View {
-        statsContent(
-            primary: theme.statsPrimary,
-            secondary: theme.statsSecondary
-        )
-        .overlay {
-            statsContent(
-                primary: theme.statsPrimaryOnWater,
-                secondary: theme.statsSecondaryOnWater
-            )
-            .mask(waterShapeMask(screenHeight: screenHeight, bumpHeight: bumpHeight).blur(radius: 30))
-        }
-        .padding(.horizontal, 32)
-    }
-
-    private func statsContent(primary: Color, secondary: Color) -> some View {
-        VStack(spacing: 32) {
-            VStack(spacing: 4) {
-                Text("\(viewModel.todaySipCount)")
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .foregroundStyle(primary)
-                    .contentTransition(.numericText())
-                Text("Sips today")
-                    .font(.subheadline)
-                    .foregroundStyle(secondary)
-            }
-
-            VStack(spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(viewModel.todayVolumeML)")
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
-                        .foregroundStyle(primary)
-                        .contentTransition(.numericText())
-                    Text("ml")
-                        .font(.system(size: 20, weight: .medium, design: .rounded))
-                        .foregroundStyle(secondary)
-                }
-                Text("In total")
-                    .font(.subheadline)
-                    .foregroundStyle(secondary)
-            }
-
-            VStack(spacing: 12) {
-                weeklyBarChart(foreground: primary, pastDayColor: secondary)
-                averageLabel(foreground: secondary)
-            }
-        }
-    }
-
-    private func weeklyBarChart(foreground: Color, pastDayColor: Color) -> some View {
+    private var weeklyBarChart: some View {
         let days = viewModel.last7Days
         let maxCount = max(days.map(\.count).max() ?? 1, 1)
 
-        return HStack(alignment: .bottom, spacing: 6) {
+        return HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(days.enumerated()), id: \.offset) { index, day in
                 let isToday = index == days.count - 1
                 let barHeight: CGFloat = day.count > 0
-                    ? max(8, CGFloat(day.count) / CGFloat(maxCount) * 40)
-                    : 4
+                    ? max(3, CGFloat(day.count) / CGFloat(maxCount) * 14)
+                    : 2
 
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(isToday ? foreground : pastDayColor)
-                    .frame(width: 8, height: barHeight)
+                Capsule()
+                    .fill(isToday ? StatsOverlayMetrics.primaryText : StatsOverlayMetrics.secondaryText)
+                    .frame(width: StatsOverlayMetrics.miniChartBarThickness, height: barHeight)
             }
         }
-        .frame(height: 40, alignment: .bottom)
+        .frame(height: 14, alignment: .bottom)
     }
 
-    private func averageLabel(foreground: Color) -> some View {
+    private var averageLabel: some View {
         Group {
             if viewModel.recentAverage > 0 {
                 let diff = Double(viewModel.todaySipCount) - viewModel.recentAverage
@@ -736,8 +979,275 @@ struct ContentView: View {
                 Text("Start sipping to build your history")
             }
         }
-        .font(.subheadline)
-        .foregroundStyle(foreground)
+        .font(StatsOverlayMetrics.sectionFont)
+        .foregroundStyle(StatsOverlayMetrics.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Cup artwork + title + progress or achieved date for one achievement.
+    private struct AchievementRow: View {
+        let progress: AchievementProgress
+        let cupImage: () -> AnyView
+        let onTap: () -> Void
+
+        init(
+            progress: AchievementProgress,
+            cupImage: @escaping () -> some View,
+            onTap: @escaping () -> Void
+        ) {
+            self.progress = progress
+            self.cupImage = { AnyView(cupImage()) }
+            self.onTap = onTap
+        }
+
+        private static let achievedDateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.setLocalizedDateFormatFromTemplate("d MMM yyyy")
+            return f
+        }()
+
+        var body: some View {
+            Button(action: onTap) {
+                HStack(alignment: .center, spacing: 16) {
+                    cupImage()
+                        .frame(width: 56, height: 56)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(progress.id.title)
+                            .font(StatsOverlayMetrics.bodyFont)
+                            .foregroundStyle(StatsOverlayMetrics.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if progress.isComplete {
+                            achievedSubtitle
+                        } else {
+                            GeometryReader { geo in
+                                let barWidth = geo.size.width
+                                    * StatsOverlayMetrics.achievementProgressBarWidthFraction
+                                HStack(alignment: .center, spacing: 10) {
+                                    AchievementProgressBar(fraction: progress.progressFraction)
+                                        .frame(width: barWidth)
+                                    Text("\(progress.current)/\(progress.target)")
+                                        .font(StatsOverlayMetrics.detailFont)
+                                        .foregroundStyle(StatsOverlayMetrics.secondaryText)
+                                        .fixedSize()
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                            .frame(height: StatsOverlayMetrics.miniChartBarThickness)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(progress.id.title)
+            .accessibilityHint("Show achievement details")
+        }
+
+        @ViewBuilder
+        private var achievedSubtitle: some View {
+            switch progress.unlockDisplay {
+            case .inProgress:
+                EmptyView()
+            case .achieved(let date):
+                Text("Achieved on \(Self.achievedDateFormatter.string(from: date))")
+                    .font(StatsOverlayMetrics.detailFont)
+                    .foregroundStyle(StatsOverlayMetrics.secondaryText)
+            case .achievedLegacy:
+                Text("Achieved")
+                    .font(StatsOverlayMetrics.detailFont)
+                    .foregroundStyle(StatsOverlayMetrics.secondaryText)
+            }
+        }
+    }
+
+    /// Horizontal progress track — same thickness as the mini 7-day chart bars.
+    private struct AchievementProgressBar: View {
+        let fraction: Double
+
+        var body: some View {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(StatsOverlayMetrics.secondaryText.opacity(0.35))
+                    Capsule()
+                        .fill(StatsOverlayMetrics.primaryText)
+                        .frame(width: max(0, proxy.size.width * fraction))
+                }
+            }
+            .frame(height: StatsOverlayMetrics.miniChartBarThickness)
+        }
+    }
+
+    /// Achievement detail — paging carousel over the stats list.
+    private struct AchievementDetailOverlay: View {
+        let achievements: [AchievementProgress]
+        let initialScrollID: AchievementID
+        @Binding var scrollID: AchievementID?
+        let screenSize: CGSize
+        let safeAreaBottom: CGFloat
+        let cupImage: (AchievementProgress) -> AnyView
+        let onDismiss: () -> Void
+
+        /// Hides the carousel until the first page is positioned without animation
+        /// (avoids a visible slide from page 1 when opening the 2nd/3rd achievement).
+        @State private var isScrollPositionReady = false
+
+        private var selectedID: AchievementID {
+            scrollID ?? initialScrollID
+        }
+
+        /// Matches the list-row text column so the detail progress bar reads the same width.
+        private var progressTrackWidth: CGFloat {
+            screenSize.width
+                - StatsOverlayMetrics.horizontalPadding * 2
+                - 56
+                - 16
+        }
+
+        var body: some View {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .ignoresSafeArea()
+
+                Color.black
+                    .opacity(AchievementDetailMetrics.scrimOpacity)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onDismiss() }
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+
+                    carousel
+
+                    pageIndicator
+                        .padding(.top, 28)
+                        .padding(.bottom, max(32, safeAreaBottom + 16))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .simultaneousGesture(
+                    TapGesture().onEnded { onDismiss() }
+                )
+            }
+        }
+
+        private var carousel: some View {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(achievements) { progress in
+                        AchievementDetailPage(
+                            progress: progress,
+                            progressTrackWidth: progressTrackWidth,
+                            cupImage: cupImage(progress)
+                        )
+                        .frame(width: screenSize.width)
+                        .id(progress.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollIndicators(.hidden)
+            .scrollPosition(id: $scrollID, anchor: .center)
+            .opacity(isScrollPositionReady ? 1 : 0)
+            .onAppear(perform: applyInitialScrollPosition)
+        }
+
+        private func applyInitialScrollPosition() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                scrollID = initialScrollID
+            }
+            // One layout pass at opacity 0 so the target page is settled before reveal.
+            DispatchQueue.main.async {
+                isScrollPositionReady = true
+            }
+        }
+
+        private var pageIndicator: some View {
+            HStack(spacing: 6) {
+                ForEach(achievements) { progress in
+                    Circle()
+                        .fill(
+                            progress.id == selectedID
+                                ? StatsOverlayMetrics.primaryText
+                                : StatsOverlayMetrics.secondaryText.opacity(0.5)
+                        )
+                        .frame(width: 7, height: 7)
+                        .animation(.easeInOut(duration: 0.2), value: selectedID)
+                }
+            }
+        }
+    }
+
+    /// Single page inside the achievement detail carousel.
+    private struct AchievementDetailPage: View {
+        let progress: AchievementProgress
+        let progressTrackWidth: CGFloat
+        let cupImage: AnyView
+
+        private static let achievedDateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.setLocalizedDateFormatFromTemplate("d MMM yyyy")
+            return f
+        }()
+
+        var body: some View {
+            VStack(spacing: AchievementDetailMetrics.cupToDetailsSpacing) {
+                cupImage
+                    .frame(
+                        width: AchievementDetailMetrics.detailCupSize,
+                        height: AchievementDetailMetrics.detailCupSize
+                    )
+
+                VStack(spacing: 6) {
+                    Text(progress.id.title)
+                        .font(StatsOverlayMetrics.bodyFont)
+                        .foregroundStyle(StatsOverlayMetrics.primaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    detailFooter
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .padding(.horizontal, StatsOverlayMetrics.horizontalPadding)
+        }
+
+        @ViewBuilder
+        private var detailFooter: some View {
+            if progress.isComplete {
+                switch progress.unlockDisplay {
+                case .inProgress:
+                    EmptyView()
+                case .achieved(let date):
+                    Text("Achieved on \(Self.achievedDateFormatter.string(from: date))")
+                        .font(StatsOverlayMetrics.detailFont)
+                        .foregroundStyle(StatsOverlayMetrics.secondaryText)
+                case .achievedLegacy:
+                    Text("Achieved")
+                        .font(StatsOverlayMetrics.detailFont)
+                        .foregroundStyle(StatsOverlayMetrics.secondaryText)
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    AchievementProgressBar(fraction: progress.progressFraction)
+                        .frame(
+                            width: progressTrackWidth
+                                * StatsOverlayMetrics.achievementProgressBarWidthFraction
+                        )
+                    Text("\(progress.current)/\(progress.target)")
+                        .font(StatsOverlayMetrics.detailFont)
+                        .foregroundStyle(StatsOverlayMetrics.secondaryText)
+                        .fixedSize()
+                }
+                .frame(width: progressTrackWidth)
+            }
+        }
     }
 
     /// "Last sip: ..." caption rendered in the bottom bar. Color picks the
@@ -753,7 +1263,12 @@ struct ContentView: View {
             }
         }
         .font(.subheadline)
-        .foregroundStyle(onWater ? theme.lastSipOnWater : theme.lastSipDehydrated)
+        .foregroundStyle(
+            showStats
+                ? StatsOverlayMetrics.secondaryText
+                : (onWater ? theme.lastSipOnWater : theme.lastSipDehydrated)
+        )
+        .animation(.easeInOut(duration: 0.35), value: showStats)
         .animation(.easeInOut(duration: 0.3), value: onWater)
     }
 
@@ -1184,10 +1699,13 @@ struct ThemeGalleryView: View {
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
                 }
-                .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
+                .liquidGlassCircleStyle(onWater: true)
                 .accessibilityLabel("Close")
             }
         }
@@ -1405,7 +1923,8 @@ private struct UnlockThemeSheet: View {
     }
 }
 
-/// Single carousel card — theme name (layer 1) + liquid-glass water (layer 2).
+/// Single carousel card — theme name + tinted animated water preview.
+/// Deliberately omits meniscus liquid glass (see `ThemePreviewWaterStack`).
 private struct ThemePreviewCard: View {
     let themeID: ThemeID
 
@@ -1418,38 +1937,35 @@ private struct ThemePreviewCard: View {
             let cardHeight = geo.size.height
             let waterHeight = cardHeight * waterFraction
 
-            GlassEffectContainer {
-                ZStack {
-                    theme.dehydratedBackground
+            ZStack {
+                theme.dehydratedBackground
 
-                    // Layer 1: theme name beneath the water (same as main UI).
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(themeID.displayName)
-                            .font(themeID.previewNameFont)
+                            .font(themeID.previewTitleLatinFont)
                             .foregroundStyle(theme.headerPrimary)
                         Text(themeID.nameChinese)
-                            .font(.system(size: 18, weight: .medium))
+                            .font(themeID.previewTitleChineseFont)
                             .foregroundStyle(theme.headerSecondary)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(24)
 
-                    // Layer 2: shared liquid-glass wave stack.
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        TimelineView(.animation) { timeline in
-                            let wavePhase = timeline.date.timeIntervalSinceReferenceDate
-                                .truncatingRemainder(dividingBy: 4) / 4
-                            LiquidGlassWaterStack(
-                                waterColor: themeID.richWaterColor,
-                                wavePhase: wavePhase,
-                                amplitude: 4,
-                                bumpHeight: 0,
-                                bodyHeight: waterHeight
-                            )
-                        }
-                        .frame(height: waterHeight)
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    TimelineView(.animation) { timeline in
+                        let wavePhase = timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 4) / 4
+                        ThemePreviewWaterStack(
+                            waterColor: themeID.previewWaterColor,
+                            wavePhase: wavePhase,
+                            amplitude: 4,
+                            bumpHeight: 0
+                        )
                     }
+                    .frame(height: waterHeight)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -1458,25 +1974,41 @@ private struct ThemePreviewCard: View {
 }
 
 private extension ThemeID {
-    /// Per-theme font for the Latin display name in `ThemePreviewCard`. Both
-    /// themes share the same 18pt size so the name slot has a stable optical
-    /// height across cards; only the family differs. Kurosawa uses bundled
-    /// Crimson Text Regular (serif) for a distinctive editorial feel; the
-    /// default theme keeps Inter-Medium (app-wide convention).
-    var previewNameFont: Font {
+    /// Latin theme name in `ThemePreviewCard`. Mirrors `headerTitleLatinFont`
+    /// at 18pt so the carousel cards keep a stable, smaller optical size.
+    var previewTitleLatinFont: Font {
         switch self {
         case .default:
-            return .custom("Inter-Medium", size: 18)
+            return .system(size: 18, weight: .medium, design: .default)
         case .kurosawa:
             return .custom("CrimsonText-SemiBold", size: 18)
         }
     }
 
+    /// Chinese name beside the Latin title in `ThemePreviewCard`.
+    var previewTitleChineseFont: Font {
+        switch self {
+        case .default:
+            return previewTitleLatinFont
+        case .kurosawa:
+            return .system(size: 18, weight: .medium)
+        }
+    }
+
+    /// Latin title in the inline main-screen header ("Sip" / "Aqua").
+    var headerTitleLatinFont: Font {
+        switch self {
+        case .default:
+            // 22pt+ uses the SF Pro Display optical size; `.default` design (not
+            // `.rounded`) keeps the neo-grotesque SF Pro family.
+            return .system(size: 22, weight: .medium, design: .default)
+        case .kurosawa:
+            return .custom("CrimsonText-SemiBold", size: 24)
+        }
+    }
+
     /// Per-theme font for the Latin header title ("Aqua"/"Sip") shown top-left
-    /// of `ContentView`. Mirrors `previewNameFont` so the main UI matches the
-    /// theme's identity in the gallery card. Kurosawa uses Crimson Text;
-    /// the default theme keeps Inter-Medium. The Chinese subtitle stays on
-    /// the system font for both themes (Crimson Text has no CJK coverage).
+    /// of `ContentView`. Legacy alias — prefer `headerTitleLatinFont`.
     var headerTitleFont: Font {
         switch self {
         case .default:

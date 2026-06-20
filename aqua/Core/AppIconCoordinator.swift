@@ -30,11 +30,8 @@ enum AppIconCoordinator {
         didBootstrapThisSession = true
         guard supportsAlternateIcons else { return }
         let persisted = SharedStorage.selectedThemeID
-        if SharedStorage.iconSyncedThemeID != persisted {
+        if needsIconSwap(for: persisted) {
             performSwap(to: persisted, attempt: 1, reason: "bootstrap")
-        } else if persisted == .default,
-                  UIApplication.shared.alternateIconName == nil {
-            performSwap(to: .default, attempt: 1, reason: "primary→Sip-Aqua")
         }
     }
 
@@ -45,11 +42,11 @@ enum AppIconCoordinator {
         performSwap(to: themeID, attempt: 1, reason: "userApply")
     }
 
-    /// Silent repair when heading home; does not require user-interaction context.
+    /// Silent repair when foregrounding or heading home.
     static func reconcileIfNeeded() {
         guard supportsAlternateIcons else { return }
         let persisted = SharedStorage.selectedThemeID
-        guard SharedStorage.iconSyncedThemeID != persisted else { return }
+        guard needsIconSwap(for: persisted) else { return }
         guard !inFlight else { return }
         performSwap(to: persisted, attempt: 1, reason: "reconcile")
     }
@@ -79,6 +76,19 @@ enum AppIconCoordinator {
         reinforceTask = nil
     }
 
+    /// Bookkeeping mismatch, or UIKit's reported alternate name still differs
+    /// from what the persisted theme requires. Used to *detect* drift — never
+    /// to skip a user-initiated swap.
+    private static func needsIconSwap(for themeID: ThemeID) -> Bool {
+        let desired = themeID.alternateIconName
+        let reported = UIApplication.shared.alternateIconName
+        if SharedStorage.iconSyncedThemeID != themeID { return true }
+        if reported != desired { return true }
+        // Fresh install: primary `Sip` icon with no named alternate yet.
+        if themeID == .default, reported == nil { return true }
+        return false
+    }
+
     private static func performSwap(to themeID: ThemeID, attempt: Int, reason: String) {
         guard supportsAlternateIcons else { return }
         if inFlight {
@@ -99,9 +109,27 @@ enum AppIconCoordinator {
                         performSwap(to: themeID, attempt: attempt + 1, reason: reason)
                         return
                     }
-                } else {
+                    completeSwap()
+                    return
+                }
+
+                let reported = UIApplication.shared.alternateIconName
+                if reported == desired {
                     print("[Aqua] setAlternateIconName(\(desired)) succeeded")
                     SharedStorage.iconSyncedThemeID = themeID
+                    completeSwap()
+                    return
+                }
+
+                print(
+                    "[Aqua] setAlternateIconName(\(desired)) UIKit ok "
+                    + "but alternateIconName=\(reported ?? "nil"); retrying"
+                )
+                if attempt < maxAttempts {
+                    inFlight = false
+                    try? await Task.sleep(for: retryDelay)
+                    performSwap(to: themeID, attempt: attempt + 1, reason: reason)
+                    return
                 }
                 completeSwap()
             }
@@ -118,12 +146,13 @@ enum AppIconCoordinator {
 
     private static func silentReinforce(to themeID: ThemeID) {
         guard supportsAlternateIcons, !inFlight else { return }
+        guard needsIconSwap(for: themeID) else { return }
         let desired = themeID.alternateIconName
         UIApplication.shared.setAlternateIconName(desired) { error in
             Task { @MainActor in
-                if error == nil {
-                    SharedStorage.iconSyncedThemeID = themeID
-                }
+                guard error == nil,
+                      UIApplication.shared.alternateIconName == desired else { return }
+                SharedStorage.iconSyncedThemeID = themeID
             }
         }
     }

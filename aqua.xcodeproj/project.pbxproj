@@ -59,8 +59,10 @@
 		8A5508A82F721500003D9A04 /* Exceptions for "aqua" folder in "AquaWidgetExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Core/Achievement.swift,
 				Core/AppTheme.swift,
 				Core/HealthKitManager.swift,
+				Core/SharedStorage.swift,
 				Core/SipIntents.swift,
 				"Resources/Fonts/CrimsonText-Regular.ttf",
 				"Resources/Fonts/CrimsonText-SemiBold.ttf",
