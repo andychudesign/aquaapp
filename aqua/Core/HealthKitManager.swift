@@ -31,11 +31,21 @@ enum HealthKitManager {
         }
     }
 
-    /// Saves a single sip (70 mL) to HealthKit.
-    /// - Parameter requestAuth: `true` (default) triggers the system authorization
-    ///   sheet on first call — use from the main app. Pass `false` from widget
-    ///   extensions that cannot present UI; relies on authorization already granted
-    ///   in the main app.
+    /// Presents the HealthKit authorization sheet during onboarding Step 3 and
+    /// marks the permission UX as handled so sip paths no longer request auth.
+    static func completeOnboardingAuthorization() async {
+        guard isAvailable else {
+            SharedStorage.markHealthKitAuthResolved()
+            return
+        }
+        _ = await requestAuthorizationIfNeeded()
+        SharedStorage.markHealthKitAuthResolved()
+    }
+
+    /// Saves a single sip to HealthKit using the current per-sip volume.
+    /// - Parameter requestAuth: Pass `true` only for the legacy first-sip path
+    ///   (pre-v1.5 upgraders). New users grant access in onboarding Step 3;
+    ///   all routine sip paths pass `false`.
     @discardableResult
     static func saveSip(requestAuth: Bool = true) async -> Bool {
         guard isAvailable else { return false }

@@ -130,14 +130,14 @@ struct WaveCrestShape: Shape {
 
 // MARK: - Shared liquid-glass water (main UI + theme gallery)
 
-private enum LiquidGlassWaterMetrics {
+enum LiquidGlassWaterMetrics {
     static let bodyOpacity = 0.50
     static let meniscusTintOpacity = 0.52
 }
 
 /// Full-screen stats scrim — blurred canvas underneath, white type on top.
 private enum StatsOverlayMetrics {
-    static let scrimOpacity = 0.40
+    static let scrimOpacity = 0.50
     static let backgroundBlur: CGFloat = 26
     static let horizontalPadding: CGFloat = 16
     /// Matches layer-3 `padding(.top, safeArea + headerChromeTopInset)`.
@@ -180,7 +180,19 @@ private enum AchievementDetailMetrics {
     static let fadeAnimation: Animation = .easeInOut(duration: 0.32)
 }
 
-private extension ThemeID {
+/// Red dot for unseen achievement unlocks (sip count + list rows).
+private struct NewUpdateBadge: View {
+    private static let badgeColor = Color(red: 1, green: 0.23, blue: 0.19)
+
+    var body: some View {
+        Circle()
+            .fill(Self.badgeColor)
+            .frame(width: 9, height: 9)
+            .accessibilityHidden(true)
+    }
+}
+
+extension ThemeID {
     /// Layer-2 water body colour — `#0089E6` for default; Kurosawa charcoal.
     func richWaterColor(scheme: ColorScheme) -> Color {
         switch self {
@@ -211,10 +223,20 @@ private extension ThemeID {
             return Color(red: 0x2E / 255.0, green: 0x2D / 255.0, blue: 0x2B / 255.0)
         }
     }
+
+    /// Latin title in the inline main-screen header ("Sip" / "Aqua").
+    var headerTitleLatinFont: Font {
+        switch self {
+        case .default:
+            return .system(size: 22, weight: .medium, design: .default)
+        case .kurosawa:
+            return .custom("CrimsonText-SemiBold", size: 24)
+        }
+    }
 }
 
 /// Meniscus-edge liquid glass — refracts layer-1 content near the wave crest.
-private struct MeniscusGlassBand: View {
+struct MeniscusGlassBand: View {
     let waterColor: Color
     let bodyShape: WaveShape
     let bodyHeight: CGFloat
@@ -245,7 +267,7 @@ private struct MeniscusGlassBand: View {
 }
 
 /// Transparent tinted wave body + meniscus glass + depth/crest highlights.
-private struct LiquidGlassWaterStack: View {
+struct LiquidGlassWaterStack: View {
     let waterColor: Color
     let bodyOpacity: Double
     let wavePhase: Double
@@ -337,6 +359,7 @@ struct ContentView: View {
     @State private var showThemePicker = false
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
     @State private var showWelcome = false
+    @State private var pendingPostOnboardingSip = false
     @State private var achievementDetailOpen = false
     @State private var achievementDetailInitialID: AchievementID?
     @State private var achievementDetailScrollID: AchievementID?
@@ -350,14 +373,17 @@ struct ContentView: View {
     private var hydrationLevel: Double { viewModel.hydrationLevel }
 
     /// Pauses the live wave + liquid-glass stack when nothing needs it —
-    /// dehydrated, backgrounded, or covered by a sheet/gallery/welcome.
-    /// Stops the main UI from competing with gallery cards' own TimelineViews.
+    /// dehydrated, backgrounded, covered by a sheet/gallery/welcome, or hidden
+    /// behind the stats / achievement-detail overlays (still blurred underneath).
+    /// Stops the presenter from animating under covers and avoids live-blur cost.
     private var waterAnimationPaused: Bool {
         hydrationLevel <= 0
             || scenePhase != .active
             || showThemePicker
             || showVolumeSheet
             || showWelcome
+            || showStats
+            || achievementDetailOpen
     }
 
     private var richWaterColor: Color { theme.id.richWaterColor(scheme: viewModel.colorScheme) }
@@ -542,7 +568,11 @@ struct ContentView: View {
             // pin themselves to the system scheme (`SipVolumeSheet`), and
             // `ThemeGalleryView` pins itself to `.dark`.
             .onChange(of: showStats) { _, open in
-                if !open { dismissAchievementDetail(immediate: true) }
+                if open {
+                    return
+                }
+                dismissAchievementDetail(immediate: true)
+                viewModel.markAchievementsSeen()
             }
             .onChange(of: waterCoversStatusBar) { _, covers in
                 applyStatusBar(waterCovers: covers)
@@ -571,13 +601,24 @@ struct ContentView: View {
         }
         .overlay {
             if showWelcome {
-                WelcomeView(theme: viewModel.theme) {
+                OnboardingView(
+                    theme: viewModel.theme,
+                    colorScheme: viewModel.colorScheme
+                ) {
                     hasSeenWelcome = true
-                    withAnimation(.spring(duration: 0.4)) {
+                    pendingPostOnboardingSip = true
+                    withAnimation(.easeInOut(duration: 0.4)) {
                         showWelcome = false
                     }
                 }
                 .transition(.opacity)
+            }
+        }
+        .onChange(of: showWelcome) { _, isShowing in
+            guard !isShowing, pendingPostOnboardingSip else { return }
+            pendingPostOnboardingSip = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                performAnimatedLogSip()
             }
         }
         .onAppear {
@@ -592,6 +633,11 @@ struct ContentView: View {
         }) {
             SipVolumeSheet(currentVolume: viewModel.sipVolumeML) { newVolume in
                 SharedStorage.sipVolumeML = newVolume
+            }
+        }
+        .onChange(of: showThemePicker) { _, open in
+            if open {
+                AppIconCoordinator.reconcileIfNeeded()
             }
         }
         .fullScreenCover(isPresented: $showThemePicker, onDismiss: {
@@ -655,8 +701,6 @@ struct ContentView: View {
             safeAreaTop: safeAreaTop,
             safeAreaBottom: safeAreaBottom
         )
-        .blur(radius: achievementDetailOpen ? StatsOverlayMetrics.backgroundBlur : 0)
-        .animation(AchievementDetailMetrics.fadeAnimation, value: achievementDetailOpen)
         .ignoresSafeArea()
     }
 
@@ -672,6 +716,7 @@ struct ContentView: View {
             screenSize: screenSize,
             safeAreaBottom: safeAreaBottom,
             cupImage: { AnyView(achievementCupImage(for: $0, detail: true)) },
+            onAchievementPageShown: acknowledgeAchievementDetailIfNeeded(for:),
             onDismiss: { dismissAchievementDetail() }
         )
         .ignoresSafeArea()
@@ -684,6 +729,13 @@ struct ContentView: View {
         withAnimation(AchievementDetailMetrics.fadeAnimation) {
             achievementDetailOpen = true
         }
+        acknowledgeAchievementDetailIfNeeded(for: id)
+    }
+
+    private func acknowledgeAchievementDetailIfNeeded(for id: AchievementID) {
+        guard let progress = viewModel.achievements.first(where: { $0.id == id }),
+              progress.isComplete else { return }
+        viewModel.acknowledgeFirstAchievementDetailView(id)
     }
 
     private func dismissAchievementDetail(immediate: Bool = false) {
@@ -817,6 +869,7 @@ struct ContentView: View {
                 ForEach(viewModel.achievements) { achievement in
                     AchievementRow(
                         progress: achievement,
+                        showNewBadge: achievement.isComplete && viewModel.isAchievementUnseen(achievement.id),
                         cupImage: { achievementCupImage(for: achievement) },
                         onTap: { openAchievementDetail(achievement.id) }
                     )
@@ -879,8 +932,17 @@ struct ContentView: View {
         .buttonBorderShape(.circle)
         .controlSize(.large)
         .liquidGlassCircleStyle(onWater: onWater)
-        .accessibilityLabel("Show stats")
+        .overlay(alignment: .topTrailing) {
+            if viewModel.hasUnseenAchievements {
+                NewUpdateBadge()
+                    .offset(x: 3, y: -3)
+            }
+        }
+        .accessibilityLabel(
+            viewModel.hasUnseenAchievements ? "Show stats, new achievement" : "Show stats"
+        )
         .animation(.easeInOut(duration: 0.35), value: onWater)
+        .animation(.easeInOut(duration: 0.35), value: viewModel.hasUnseenAchievements)
     }
 
     /// Close (✕) Liquid Glass button. Crossfades in place with the sip-count
@@ -987,15 +1049,18 @@ struct ContentView: View {
     /// Cup artwork + title + progress or achieved date for one achievement.
     private struct AchievementRow: View {
         let progress: AchievementProgress
+        let showNewBadge: Bool
         let cupImage: () -> AnyView
         let onTap: () -> Void
 
         init(
             progress: AchievementProgress,
+            showNewBadge: Bool,
             cupImage: @escaping () -> some View,
             onTap: @escaping () -> Void
         ) {
             self.progress = progress
+            self.showNewBadge = showNewBadge
             self.cupImage = { AnyView(cupImage()) }
             self.onTap = onTap
         }
@@ -1011,6 +1076,12 @@ struct ContentView: View {
                 HStack(alignment: .center, spacing: 16) {
                     cupImage()
                         .frame(width: 56, height: 56)
+                        .overlay(alignment: .topTrailing) {
+                            if showNewBadge {
+                                NewUpdateBadge()
+                                    .offset(x: 2, y: -2)
+                            }
+                        }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text(progress.id.title)
@@ -1088,6 +1159,7 @@ struct ContentView: View {
         let screenSize: CGSize
         let safeAreaBottom: CGFloat
         let cupImage: (AchievementProgress) -> AnyView
+        let onAchievementPageShown: (AchievementID) -> Void
         let onDismiss: () -> Void
 
         /// Hides the carousel until the first page is positioned without animation
@@ -1131,6 +1203,10 @@ struct ContentView: View {
                 .simultaneousGesture(
                     TapGesture().onEnded { onDismiss() }
                 )
+            }
+            .onChange(of: scrollID) { _, newID in
+                guard let newID else { return }
+                onAchievementPageShown(newID)
             }
         }
 
@@ -1311,15 +1387,7 @@ struct ContentView: View {
     /// `waterColor` (blue) instead of the adaptive black glass glyph.
     private func logWaterButton(onWater: Bool) -> some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.5)) {
-                viewModel.logWater()
-            }
-            sloshAmplitude = 10
-            withAnimation(.interpolatingSpring(stiffness: 18, damping: 3)) {
-                sloshAmplitude = 0
-            }
-            Self.sipSoundPlayer?.currentTime = 0
-            Self.sipSoundPlayer?.play()
+            performAnimatedLogSip()
         } label: {
             Image(systemName: "drop.fill")
                 .font(.system(size: 26, weight: .semibold))
@@ -1331,6 +1399,18 @@ struct ContentView: View {
         .liquidGlassCircleStyle(onWater: onWater)
         .accessibilityLabel("I drank water")
         .animation(.easeInOut(duration: 0.35), value: onWater)
+    }
+
+    private func performAnimatedLogSip() {
+        withAnimation(.easeInOut(duration: 0.5)) {
+            viewModel.logWater()
+        }
+        sloshAmplitude = 10
+        withAnimation(.interpolatingSpring(stiffness: 18, damping: 3)) {
+            sloshAmplitude = 0
+        }
+        Self.sipSoundPlayer?.currentTime = 0
+        Self.sipSoundPlayer?.play()
     }
 
     /// Droplet color for the log-sip glass button: white over water; default
@@ -1421,7 +1501,7 @@ struct ContentView: View {
 /// pin an explicit `\.colorScheme` so the window-level status-bar trait flip
 /// can't drag buttons into the wrong polarity.
 /// `.glassProminent` was tried but paints an opaque white fill — do not use.
-private struct LiquidGlassCircleButtonStyle: ViewModifier {
+struct LiquidGlassCircleButtonStyle: ViewModifier {
     let onWater: Bool
 
     func body(content: Content) -> some View {
@@ -1438,7 +1518,7 @@ private struct LiquidGlassCircleButtonStyle: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func liquidGlassCircleStyle(onWater: Bool) -> some View {
         modifier(LiquidGlassCircleButtonStyle(onWater: onWater))
     }
@@ -1608,7 +1688,9 @@ struct ThemeGalleryView: View {
 
     private var selectedID: ThemeID { scrolledID ?? appliedID }
     private var selectedTheme: AppTheme { .forID(selectedID) }
-    private var isSelectedApplied: Bool { selectedID == appliedID }
+    private var isSelectedApplied: Bool {
+        selectedID == appliedID && AppIconCoordinator.isThemeIconAligned(appliedID)
+    }
     private var isSelectedLocked: Bool { !unlockedIDs.contains(selectedID) }
 
     var body: some View {
@@ -1726,9 +1808,12 @@ struct ThemeGalleryView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 12) {
                     ForEach(ThemeID.allCases) { id in
-                        ThemePreviewCard(themeID: id)
-                            .frame(width: cardWidth)
-                            .id(id)
+                        ThemePreviewCard(
+                            themeID: id,
+                            waveAnimationPaused: id != selectedID
+                        )
+                        .frame(width: cardWidth)
+                        .id(id)
                     }
                 }
                 .scrollTargetLayout()
@@ -1927,6 +2012,8 @@ private struct UnlockThemeSheet: View {
 /// Deliberately omits meniscus liquid glass (see `ThemePreviewWaterStack`).
 private struct ThemePreviewCard: View {
     let themeID: ThemeID
+    /// Only the centered carousel card animates; peek cards stay on a static frame.
+    var waveAnimationPaused: Bool = false
 
     private var theme: AppTheme { .forID(themeID) }
     private let cornerRadius: CGFloat = 36
@@ -1955,7 +2042,7 @@ private struct ThemePreviewCard: View {
 
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    TimelineView(.animation) { timeline in
+                    TimelineView(.animation(paused: waveAnimationPaused)) { timeline in
                         let wavePhase = timeline.date.timeIntervalSinceReferenceDate
                             .truncatingRemainder(dividingBy: 4) / 4
                         ThemePreviewWaterStack(
@@ -1992,18 +2079,6 @@ private extension ThemeID {
             return previewTitleLatinFont
         case .kurosawa:
             return .system(size: 18, weight: .medium)
-        }
-    }
-
-    /// Latin title in the inline main-screen header ("Sip" / "Aqua").
-    var headerTitleLatinFont: Font {
-        switch self {
-        case .default:
-            // 22pt+ uses the SF Pro Display optical size; `.default` design (not
-            // `.rounded`) keeps the neo-grotesque SF Pro family.
-            return .system(size: 22, weight: .medium, design: .default)
-        case .kurosawa:
-            return .custom("CrimsonText-SemiBold", size: 24)
         }
     }
 

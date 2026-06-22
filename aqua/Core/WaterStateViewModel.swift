@@ -45,6 +45,11 @@ final class WaterStateViewModel {
     /// Achievement progress rows for the stats overlay (v1.5+).
     private(set) var achievements: [AchievementProgress] = SharedStorage.allAchievementProgress()
 
+    /// Achievements unlocked since the stats overlay was last dismissed.
+    private(set) var unseenAchievementIDs: Set<AchievementID> = SharedStorage.unseenAchievementIDs
+
+    var hasUnseenAchievements: Bool { !unseenAchievementIDs.isEmpty }
+
     private var refreshTimer: Timer?
 
     var isFullyDehydrated: Bool { hydrationLevel <= 0 }
@@ -52,6 +57,8 @@ final class WaterStateViewModel {
 
     init() {
         SharedStorage.runAchievementsV15MigrationIfNeeded()
+        SharedStorage.runKurosawaDatedUnlockBackfillIfNeeded()
+        SharedStorage.runAchievementNotificationsMigrationIfNeeded()
         hydrationLevel = SharedStorage.hydrationLevel()
         syncSipStats()
         startRefreshTimerIfNeeded()
@@ -87,14 +94,12 @@ final class WaterStateViewModel {
         startRefreshTimerIfNeeded()
 
         Task {
-            let saved = await HealthKitManager.saveSip()
-            if saved {
-                let suite = UserDefaults(suiteName: SharedStorage.appGroupID)
-                suite?.set(true, forKey: "healthKitAuthResolved")
-                // Re-reload so the widget button rebinds to the background
-                // intent now that auth is resolved. Per-kind (not
-                // `reloadAllTimelines()`) to avoid over-charging the
-                // accessory widgets' reload budget — see `SharedStorage.logWater()`.
+            if SharedStorage.isHealthKitAuthResolved {
+                _ = await HealthKitManager.saveSip(requestAuth: false)
+            } else {
+                // Pre-v1.5 upgraders who skipped the new onboarding Health step.
+                _ = await HealthKitManager.saveSip(requestAuth: true)
+                SharedStorage.markHealthKitAuthResolved()
                 WidgetCenter.shared.reloadTimelines(ofKind: "AquaWidget")
                 WidgetCenter.shared.reloadTimelines(ofKind: "SipStatusWidget")
             }
@@ -109,7 +114,9 @@ final class WaterStateViewModel {
         let previousID = SharedStorage.selectedThemeID
         SharedStorage.writeSelectedThemeID(id)
         theme = AppTheme.forID(id, scheme: colorScheme)
-        guard previousID != id else { return }
+        let themeChanged = previousID != id
+        let iconMisaligned = !AppIconCoordinator.isThemeIconAligned(id)
+        guard themeChanged || iconMisaligned else { return }
         AppIconCoordinator.applyUserThemeChange(to: id)
     }
 
@@ -143,6 +150,26 @@ final class WaterStateViewModel {
         return style == .dark ? .dark : .light
     }
 
+    /// Mark all achievement notifications as seen when the stats overlay closes.
+    func markAchievementsSeen() {
+        guard hasUnseenAchievements else { return }
+        SharedStorage.clearUnseenAchievements()
+        unseenAchievementIDs = []
+    }
+
+    func isAchievementUnseen(_ id: AchievementID) -> Bool {
+        unseenAchievementIDs.contains(id)
+    }
+
+    /// Returns `true` on the first detail view — also clears the list/sip badge.
+    @discardableResult
+    func acknowledgeFirstAchievementDetailView(_ id: AchievementID) -> Bool {
+        guard SharedStorage.markAchievementDetailViewed(id) else { return false }
+        SharedStorage.markAchievementSeen(id)
+        unseenAchievementIDs = SharedStorage.unseenAchievementIDs
+        return true
+    }
+
     private func syncSipStats() {
         todaySipCount = SharedStorage.todaySipCount
         last7Days = SharedStorage.last7DaysSipCounts
@@ -150,6 +177,7 @@ final class WaterStateViewModel {
         sipVolumeML = SharedStorage.sipVolumeML
         todayVolumeML = SharedStorage.todayTotalVolumeML
         achievements = SharedStorage.allAchievementProgress()
+        unseenAchievementIDs = SharedStorage.unseenAchievementIDs
     }
 
     /// Refresh UI from shared storage so we stay in sync with widget and persist across launches.

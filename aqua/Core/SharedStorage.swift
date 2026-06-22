@@ -14,6 +14,18 @@ enum SharedStorage {
         UserDefaults(suiteName: appGroupID)
     }
 
+    private static let healthKitAuthResolvedKey = "healthKitAuthResolved"
+
+    /// Whether the HealthKit permission UX has been handled (onboarding Step 3
+    /// or a legacy first-sip prompt for pre-v1.5 users).
+    static var isHealthKitAuthResolved: Bool {
+        suite?.bool(forKey: healthKitAuthResolvedKey) ?? false
+    }
+
+    static func markHealthKitAuthResolved() {
+        suite?.set(true, forKey: healthKitAuthResolvedKey)
+    }
+
     private static let lastWaterLogTimeKey = "lastWaterLogTime"
     private static let hydrationDuration: TimeInterval = 7200
 
@@ -174,6 +186,72 @@ enum SharedStorage {
         return sipCount(on: dateString) * sipVolumeML
     }
 
+    // MARK: - Calendar-week lookups (Siri week queries)
+
+    /// Which calendar week to aggregate — locale-aware via `Calendar.current`.
+    enum WeekScope {
+        case thisWeek
+        case lastWeek
+
+        /// A date inside the target week (today, or one week ago).
+        var referenceDate: Date {
+            let cal = Calendar.current
+            switch self {
+            case .thisWeek:
+                return Date()
+            case .lastWeek:
+                return cal.date(byAdding: .weekOfYear, value: -1, to: Date()) ?? Date()
+            }
+        }
+    }
+
+    /// All `yyyy-MM-dd` keys for the seven days in a calendar week.
+    static func dateKeysInWeek(scope: WeekScope) -> [String] {
+        let cal = Calendar.current
+        guard let interval = cal.dateInterval(of: .weekOfYear, for: scope.referenceDate) else {
+            return []
+        }
+        var keys: [String] = []
+        var day = interval.start
+        while day < interval.end {
+            keys.append(dateKey(for: day))
+            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return keys
+    }
+
+    /// Date keys inside the target week that still fall within the persisted
+    /// 7-day history window (today + 6 prior).
+    static func availableDateKeysInWeek(scope: WeekScope) -> Set<String> {
+        let weekKeys = Set(dateKeysInWeek(scope: scope))
+        let available = Set((0..<7).map { dateString(daysAgo: $0) })
+        return weekKeys.intersection(available)
+    }
+
+    /// Total sips logged on days in the target week that we still have data for.
+    static func sipCount(forWeek scope: WeekScope) -> Int {
+        availableDateKeysInWeek(scope: scope)
+            .reduce(0) { $0 + sipCount(on: $1) }
+    }
+
+    /// Total mL for the target week (today uses actual volume; earlier days
+    /// estimated — same convention as per-day lookups).
+    static func estimatedVolumeML(forWeek scope: WeekScope) -> Int {
+        availableDateKeysInWeek(scope: scope)
+            .reduce(0) { $0 + estimatedVolumeML(on: $1) }
+    }
+
+    /// Average daily sips among days in the target week that have at least one
+    /// sip. Returns 0 when no days in the week have data.
+    static func dailyAverage(forWeek scope: WeekScope) -> Double {
+        let keys = availableDateKeysInWeek(scope: scope)
+        let counts = keys.map { sipCount(on: $0) }
+        let daysWithData = counts.filter { $0 > 0 }.count
+        guard daysWithData > 0 else { return 0 }
+        return Double(counts.reduce(0, +)) / Double(daysWithData)
+    }
+
     private static func dateString(daysAgo: Int) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -274,6 +352,71 @@ enum SharedStorage {
     private static let sevenSipLastQualifiedDayKey = "sevenSipLastQualifiedDay"
     private static let achievementUnlockDatesKey = "achievementUnlockDates"
     private static let achievementLegacyUnlocksKey = "achievementLegacyUnlocks"
+    private static let unseenAchievementIDsKey = "unseenAchievementIDs"
+    private static let achievementDetailViewedIDsKey = "achievementDetailViewedIDs"
+    private static let achievementNotificationsMigratedKey = "achievementNotificationsMigrated"
+    private static let kurosawaDatedUnlockBackfillKey = "kurosawaDatedUnlockBackfillV1"
+
+    /// Achievements unlocked since the user last dismissed the stats overlay.
+    static var unseenAchievementIDs: Set<AchievementID> {
+        get {
+            let stored = suite?.array(forKey: unseenAchievementIDsKey) as? [String] ?? []
+            return Set(stored.compactMap(AchievementID.init(rawValue:)))
+        }
+        set {
+            suite?.set(newValue.map(\.rawValue).sorted(), forKey: unseenAchievementIDsKey)
+        }
+    }
+
+    /// Achievements whose detail zoom has been opened at least once.
+    static var achievementDetailViewedIDs: Set<AchievementID> {
+        get {
+            let stored = suite?.array(forKey: achievementDetailViewedIDsKey) as? [String] ?? []
+            return Set(stored.compactMap(AchievementID.init(rawValue:)))
+        }
+        set {
+            suite?.set(newValue.map(\.rawValue).sorted(), forKey: achievementDetailViewedIDsKey)
+        }
+    }
+
+    /// One-time backfill so pre-existing unlocks do not show badges.
+    /// Achievements left in `unseenAchievementIDs` (e.g. v1.4 Kurosawa on first v1.5
+    /// launch) are excluded so the red dot stays until the user opens stats/detail.
+    static func runAchievementNotificationsMigrationIfNeeded() {
+        guard suite?.bool(forKey: achievementNotificationsMigratedKey) != true else { return }
+        suite?.set(true, forKey: achievementNotificationsMigratedKey)
+        let unseen = unseenAchievementIDs
+        let alreadyComplete = AchievementID.allCases.filter { progress(for: $0).isComplete }
+        var viewed = achievementDetailViewedIDs
+        viewed.formUnion(alreadyComplete.filter { !unseen.contains($0) })
+        achievementDetailViewedIDs = viewed
+    }
+
+    static func markAchievementUnseen(_ id: AchievementID) {
+        var unseen = unseenAchievementIDs
+        unseen.insert(id)
+        unseenAchievementIDs = unseen
+    }
+
+    static func clearUnseenAchievements() {
+        unseenAchievementIDs = []
+    }
+
+    static func markAchievementSeen(_ id: AchievementID) {
+        var unseen = unseenAchievementIDs
+        unseen.remove(id)
+        unseenAchievementIDs = unseen
+    }
+
+    /// Returns `true` when this is the first time the detail view is opened.
+    @discardableResult
+    static func markAchievementDetailViewed(_ id: AchievementID) -> Bool {
+        var viewed = achievementDetailViewedIDs
+        guard !viewed.contains(id) else { return false }
+        viewed.insert(id)
+        achievementDetailViewedIDs = viewed
+        return true
+    }
 
     /// Total sips logged since v1.5 achievement tracking began.
     static var lifetimeSipCount: Int {
@@ -291,13 +434,30 @@ enum SharedStorage {
     }
 
     /// Run once on first launch after updating to v1.5. Backfills the Kurosawa
-    /// achievement for users who unlocked in v1.4 without a recorded date.
+    /// achievement for users who unlocked in v1.4 — first v1.5 launch day becomes
+    /// the recorded date and triggers the unseen badge.
     static func runAchievementsV15MigrationIfNeeded() {
         guard suite?.bool(forKey: achievementsV15MigratedKey) != true else { return }
         suite?.set(true, forKey: achievementsV15MigratedKey)
         if isUnlocked(.kurosawa) {
-            markAchievementLegacyUnlocked(.unlockKurosawa)
+            recordAchievementUnlock(.unlockKurosawa, date: Date())
         }
+    }
+
+    /// Upgrades users who already received the old legacy Kurosawa backfill
+    /// (no date, no red dot) to a dated unlock on first launch after this ships.
+    static func runKurosawaDatedUnlockBackfillIfNeeded() {
+        guard suite?.bool(forKey: kurosawaDatedUnlockBackfillKey) != true else { return }
+        suite?.set(true, forKey: kurosawaDatedUnlockBackfillKey)
+        guard isUnlocked(.kurosawa) else { return }
+        guard achievementUnlockDate(for: .unlockKurosawa) == nil else { return }
+
+        removeAchievementLegacyUnlock(.unlockKurosawa)
+        recordAchievementUnlock(.unlockKurosawa, date: Date())
+
+        var viewed = achievementDetailViewedIDs
+        viewed.remove(.unlockKurosawa)
+        achievementDetailViewedIDs = viewed
     }
 
     /// Progress for every achievement, ordered for display.
@@ -451,10 +611,17 @@ enum SharedStorage {
         suite?.set(stored, forKey: achievementLegacyUnlocksKey)
     }
 
+    private static func removeAchievementLegacyUnlock(_ id: AchievementID) {
+        var stored = suite?.array(forKey: achievementLegacyUnlocksKey) as? [String] ?? []
+        stored.removeAll { $0 == id.rawValue }
+        suite?.set(stored, forKey: achievementLegacyUnlocksKey)
+    }
+
     private static func recordAchievementUnlock(_ id: AchievementID, date: Date = Date()) {
         var map = suite?.dictionary(forKey: achievementUnlockDatesKey) as? [String: Double] ?? [:]
         guard map[id.rawValue] == nil else { return }
         map[id.rawValue] = date.timeIntervalSince1970
         suite?.set(map, forKey: achievementUnlockDatesKey)
+        markAchievementUnseen(id)
     }
 }

@@ -22,23 +22,31 @@ enum AppIconCoordinator {
 
     // MARK: - Public
 
-    /// Cold launch / return to foreground: align the icon with persisted theme.
-    /// Also migrates a fresh install from the primary `Sip` icon to `Sip-Aqua`
-    /// so every theme change is an alternate-to-alternate swap.
+    /// Cold launch: align bookkeeping with the home-screen icon without
+    /// calling `setAlternateIconName` when the primary `Sip` icon already
+    /// matches the Default theme (fresh install / reinstall).
     static func bootstrapIfNeeded() {
         guard !didBootstrapThisSession else { return }
         didBootstrapThisSession = true
         guard supportsAlternateIcons else { return }
+
         let persisted = SharedStorage.selectedThemeID
-        if needsIconSwap(for: persisted) {
-            performSwap(to: persisted, attempt: 1, reason: "bootstrap")
+        if isIconAligned(for: persisted) {
+            syncBookkeeping(for: persisted)
+            return
         }
+        performSwap(to: persisted, attempt: 1, reason: "bootstrap")
     }
 
     /// User tapped "Set theme" — must be called synchronously from the gallery
     /// pill's `Button` action before `dismiss()`.
     static func applyUserThemeChange(to themeID: ThemeID) {
         cancelReinforces()
+        // A silent bootstrap/reconcile swap must not win over an explicit pick.
+        if inFlight {
+            inFlight = false
+            pendingThemeID = nil
+        }
         performSwap(to: themeID, attempt: 1, reason: "userApply")
     }
 
@@ -46,20 +54,32 @@ enum AppIconCoordinator {
     static func reconcileIfNeeded() {
         guard supportsAlternateIcons else { return }
         let persisted = SharedStorage.selectedThemeID
-        guard needsIconSwap(for: persisted) else { return }
+        guard needsIconSwap(for: persisted) else {
+            syncBookkeeping(for: persisted)
+            return
+        }
         guard !inFlight else { return }
         performSwap(to: persisted, attempt: 1, reason: "reconcile")
     }
 
-    /// Nudge every SpringBoard surface after the gallery dismisses and widgets
-    /// have reloaded — Spotlight in particular can lag a primary swap.
+    /// Whether the home-screen icon matches `themeID`. Exposed for the theme
+    /// gallery so "Applied" can offer a retry when persistence and SpringBoard
+    /// drift apart.
+    static func isThemeIconAligned(_ themeID: ThemeID) -> Bool {
+        isIconAligned(for: themeID)
+    }
+
+    /// Nudge every SpringBoard surface after the gallery dismisses when the
+    /// user-initiated swap did not fully land (Spotlight can lag).
     static func schedulePostDismissReinforces(for themeID: ThemeID) {
         cancelReinforces()
+        guard needsIconSwap(for: themeID) else { return }
         reinforceTask = Task {
             for seconds in [0.35, 0.9, 1.8] {
                 try? await Task.sleep(for: .seconds(seconds))
                 guard !Task.isCancelled else { return }
                 guard SharedStorage.selectedThemeID == themeID else { return }
+                guard needsIconSwap(for: themeID) else { return }
                 silentReinforce(to: themeID)
             }
         }
@@ -76,17 +96,46 @@ enum AppIconCoordinator {
         reinforceTask = nil
     }
 
-    /// Bookkeeping mismatch, or UIKit's reported alternate name still differs
-    /// from what the persisted theme requires. Used to *detect* drift — never
-    /// to skip a user-initiated swap.
-    private static func needsIconSwap(for themeID: ThemeID) -> Bool {
-        let desired = themeID.alternateIconName
+    /// Whether the home-screen icon already matches the persisted theme.
+    /// Primary `Sip` (nil alternate) counts as Default — do not force a
+    /// `Sip-Aqua` swap on first launch; that only triggers SpringBoard's
+    /// "App Icon Changed" alert with no user action.
+    private static func isIconAligned(for themeID: ThemeID) -> Bool {
         let reported = UIApplication.shared.alternateIconName
-        if SharedStorage.iconSyncedThemeID != themeID { return true }
-        if reported != desired { return true }
-        // Fresh install: primary `Sip` icon with no named alternate yet.
-        if themeID == .default, reported == nil { return true }
-        return false
+        switch themeID {
+        case .default:
+            return reported == nil || reported == ThemeID.default.alternateIconName
+        case .kurosawa:
+            return reported == ThemeID.kurosawa.alternateIconName
+        }
+    }
+
+    private static func needsIconSwap(for themeID: ThemeID) -> Bool {
+        !isIconAligned(for: themeID)
+    }
+
+    private static func syncBookkeeping(for themeID: ThemeID) {
+        if SharedStorage.iconSyncedThemeID != themeID {
+            SharedStorage.iconSyncedThemeID = themeID
+        }
+    }
+
+    /// Named alternate for every theme; Default may fall back to `nil`
+    /// (primary `Sip`) on the final retry when reverting from Kurosawa —
+    /// iOS 26/27 can accept UIKit success for `Sip-Aqua` without updating
+    /// SpringBoard's cache.
+    private static func swapIconName(for themeID: ThemeID, attempt: Int) -> String? {
+        switch themeID {
+        case .kurosawa:
+            return ThemeID.kurosawa.alternateIconName
+        case .default:
+            let reported = UIApplication.shared.alternateIconName
+            if attempt >= maxAttempts,
+               reported == ThemeID.kurosawa.alternateIconName {
+                return nil
+            }
+            return ThemeID.default.alternateIconName
+        }
     }
 
     private static func performSwap(to themeID: ThemeID, attempt: Int, reason: String) {
@@ -96,13 +145,14 @@ enum AppIconCoordinator {
             return
         }
         inFlight = true
-        let desired = themeID.alternateIconName
-        print("[Aqua] setAlternateIconName(\(desired)) [\(reason)] attempt \(attempt)")
+        let desired = swapIconName(for: themeID, attempt: attempt)
+        let desiredLabel = desired ?? "nil"
+        print("[Aqua] setAlternateIconName(\(desiredLabel)) [\(reason)] attempt \(attempt)")
         UIApplication.shared.setAlternateIconName(desired) { error in
             Task { @MainActor in
                 if let error {
                     let ns = error as NSError
-                    print("[Aqua] setAlternateIconName(\(desired)) failed: \(error)")
+                    print("[Aqua] setAlternateIconName(\(desiredLabel)) failed: \(error)")
                     if ns.domain == NSPOSIXErrorDomain, ns.code == 35, attempt < maxAttempts {
                         inFlight = false
                         try? await Task.sleep(for: retryDelay)
@@ -113,16 +163,16 @@ enum AppIconCoordinator {
                     return
                 }
 
-                let reported = UIApplication.shared.alternateIconName
-                if reported == desired {
-                    print("[Aqua] setAlternateIconName(\(desired)) succeeded")
+                if isIconAligned(for: themeID) {
+                    print("[Aqua] setAlternateIconName(\(desiredLabel)) succeeded")
                     SharedStorage.iconSyncedThemeID = themeID
                     completeSwap()
                     return
                 }
 
+                let reported = UIApplication.shared.alternateIconName
                 print(
-                    "[Aqua] setAlternateIconName(\(desired)) UIKit ok "
+                    "[Aqua] setAlternateIconName(\(desiredLabel)) UIKit ok "
                     + "but alternateIconName=\(reported ?? "nil"); retrying"
                 )
                 if attempt < maxAttempts {
@@ -146,12 +196,14 @@ enum AppIconCoordinator {
 
     private static func silentReinforce(to themeID: ThemeID) {
         guard supportsAlternateIcons, !inFlight else { return }
-        guard needsIconSwap(for: themeID) else { return }
-        let desired = themeID.alternateIconName
+        guard needsIconSwap(for: themeID) else {
+            syncBookkeeping(for: themeID)
+            return
+        }
+        let desired = swapIconName(for: themeID, attempt: maxAttempts)
         UIApplication.shared.setAlternateIconName(desired) { error in
             Task { @MainActor in
-                guard error == nil,
-                      UIApplication.shared.alternateIconName == desired else { return }
+                guard error == nil, isIconAligned(for: themeID) else { return }
                 SharedStorage.iconSyncedThemeID = themeID
             }
         }

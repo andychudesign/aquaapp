@@ -18,11 +18,7 @@ struct LogWaterIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         SharedStorage.recordSip()
-        let saved = await HealthKitManager.saveSip(requestAuth: false)
-        if saved {
-            let suite = UserDefaults(suiteName: appGroupID)
-            suite?.set(true, forKey: "healthKitAuthResolved")
-        }
+        _ = await HealthKitManager.saveSip(requestAuth: false)
         // Reload each widget kind exactly once, after all shared state is
         // committed (including the HealthKit auth flag, which decides which
         // intent the button binds to).
