@@ -70,9 +70,9 @@ struct LogSipIntent: AppIntent {
 /// chosen day's sip count, volume in mL, and how it compares to the rest of the
 /// week — both spoken (dialog) and as a snippet with a 7-day mini bar chart.
 struct WaterIntakeQueryIntent: AppIntent {
-    static let title: LocalizedStringResource = "Check Water Intake"
+    static let title: LocalizedStringResource = "Check Sip Intake"
     static let description = IntentDescription(
-        "See how much water you logged on a given day and how it compares to your week."
+        "See how many sips you logged in Sip on a given day and how it compares to your week."
     )
     static let openAppWhenRun: Bool = false
 
@@ -432,6 +432,9 @@ private enum WaterIntakeSnippetMetrics {
     static let maxContentHeight: CGFloat = 156
     static let trendToLineSpacing: CGFloat = 6
     static let statsGap: CGFloat = 8
+    /// Extra space between the stats block and the trend row when stats sit above
+    /// the blue reference line.
+    static let statsAboveTrendGap: CGFloat = 20
     static let statsTopPadding: CGFloat = 2
     static let statsBelowLineThreshold: CGFloat = 0.5
     static let metricFontSize: CGFloat = 26
@@ -707,11 +710,11 @@ private struct SnippetContentMetrics {
             }
         } else if isHighlightTallest {
             computed = max(
-                m.statsBlockHeight + m.statsGap + trendBlockHeight + chartBlockHeight,
+                m.statsBlockHeight + m.statsAboveTrendGap + trendBlockHeight + chartBlockHeight,
                 chartBlockHeight
             )
         } else {
-            let compact = m.statsBlockHeight + m.statsGap + trendBlockHeight
+            let compact = m.statsBlockHeight + m.statsAboveTrendGap + trendBlockHeight
                 + m.chartLabelSpacing + m.chartLabelHeight + highlightBarPx
             computed = max(compact, chartBlockHeight)
         }
@@ -767,10 +770,11 @@ private struct SnippetLayout {
 
 /// Registers the Siri / Spotlight phrases. Every phrase must contain the
 /// `\(.applicationName)` token (an Apple requirement for app-provided
-/// shortcuts). The app's display name is "Sip", so it slots in as a natural
-/// verb: log reads as "Take a Sip", and the query reads as "How much water did
-/// I Sip today". A `\(\.$day)` token lets the query vary by today / yesterday /
-/// weekday; the plain query phrases default to today.
+/// shortcuts). The app's display name is "Sip".
+///
+/// **Avoid the word "water" in phrases** — Siri treats those as Health-app
+/// hydration queries and shows a "Sip or Health?" disambiguation card. Use
+/// "Sip" / "sips" wording instead (e.g. "How much Sip did I take today").
 struct SipShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -788,27 +792,35 @@ struct SipShortcutsProvider: AppShortcutsProvider {
         AppShortcut(
             intent: WaterIntakeQueryIntent(),
             phrases: [
-                "How much water did I \(.applicationName) \(\.$day)",
+                // Sip-first / no "water" — primary phrases (first = shortcut tile label)
+                "How much \(.applicationName) did I take \(\.$day)",
+                "How many \(.applicationName) did I take \(\.$day)",
+                "How many \(.applicationName) I took \(\.$day)",
+                "How many \(.applicationName) I take \(\.$day)",
+                "How much \(.applicationName) I took \(\.$day)",
+                "How much \(.applicationName) I take \(\.$day)",
                 "How much did I \(.applicationName) \(\.$day)",
                 "How many \(.applicationName)s did I have \(\.$day)",
-                "How many \(.applicationName) did I take \(\.$day)",
-                "How much \(.applicationName) did I take \(\.$day)",
                 "How many \(.applicationName)s did I take \(\.$day)",
                 "How many \(.applicationName) did I do \(\.$day)",
                 "How many \(.applicationName) do I take \(\.$day)",
-                "How much water I \(.applicationName) \(\.$day)",
-                "How many water I \(.applicationName) \(\.$day)",
-                "How much water did I \(.applicationName)",
-                "How much did I \(.applicationName)",
-                "How many \(.applicationName) did I take",
+                "\(.applicationName) how much did I take \(\.$day)",
+                "\(.applicationName) how many did I take \(\.$day)",
+                // Today defaults (no day parameter)
                 "How much \(.applicationName) did I take",
+                "How many \(.applicationName) did I take",
+                "How many \(.applicationName) I took",
+                "How many \(.applicationName) I take",
+                "How much \(.applicationName) I took",
+                "How much \(.applicationName) I take",
+                "How much did I \(.applicationName)",
                 "How many \(.applicationName)s did I take",
                 "How many \(.applicationName) did I do",
                 "How many \(.applicationName) do I take",
-                "How much water I \(.applicationName)",
-                "How many water I \(.applicationName)"
+                "\(.applicationName) how much did I take",
+                "\(.applicationName) how many did I take"
             ],
-            shortTitle: "Water Intake",
+            shortTitle: "Check Sip Intake",
             systemImageName: "chart.bar.fill"
         )
         AppShortcut(
@@ -816,10 +828,11 @@ struct SipShortcutsProvider: AppShortcutsProvider {
             phrases: [
                 "How much \(.applicationName) did I take this week",
                 "How many \(.applicationName)s did I take this week",
-                "How much water did I \(.applicationName) this week",
-                "How many \(.applicationName) did I do this week"
+                "How many \(.applicationName) I took this week",
+                "How many \(.applicationName) did I do this week",
+                "\(.applicationName) how much did I take this week"
             ],
-            shortTitle: "Water Intake",
+            shortTitle: "Check Sip Intake",
             systemImageName: "chart.bar.fill"
         )
         AppShortcut(
@@ -827,10 +840,11 @@ struct SipShortcutsProvider: AppShortcutsProvider {
             phrases: [
                 "How much \(.applicationName) did I take last week",
                 "How many \(.applicationName)s did I take last week",
-                "How much water did I \(.applicationName) last week",
-                "How many \(.applicationName) did I do last week"
+                "How many \(.applicationName) I took last week",
+                "How many \(.applicationName) did I do last week",
+                "\(.applicationName) how much did I take last week"
             ],
-            shortTitle: "Water Intake",
+            shortTitle: "Check Sip Intake",
             systemImageName: "chart.bar.fill"
         )
     }

@@ -1,4 +1,7 @@
 {
+  "features" : [
+    "refractivity"
+  ],
   "fill" : {
     "linear-gradient" : [
       "display-p3:1.00000,0.97581,0.86654,1.00000",
@@ -43,18 +46,6 @@
               -209.4765625
             ]
           }
-        },
-        {
-          "glass" : false,
-          "image-name" : "Frame s6.png",
-          "name" : "Frame s6",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              0,
-              229.7109375
-            ]
-          }
         }
       ],
       "shadow" : {
@@ -67,6 +58,8 @@
       }
     },
     {
+      "blend-mode" : "normal",
+      "blur-material" : 0.1,
       "layers" : [
         {
           "blend-mode-specializations" : [
@@ -94,6 +87,7 @@
               }
             }
           ],
+          "glass" : true,
           "hidden" : false,
           "image-name" : "app icon.svg",
           "name" : "app icon",
@@ -106,13 +100,57 @@
           }
         }
       ],
+      "lighting" : "individual",
+      "opacity" : 0.8,
+      "refractivity" : {
+        "depth" : 0.35546875,
+        "enabled" : true,
+        "strength" : 0.946796875
+      },
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 1
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.4
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "system-light"
+            }
+          ],
+          "glass" : false,
+          "image-name" : "Frame s6.png",
+          "name" : "Frame s6",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              229.7109375
+            ]
+          }
+        }
+      ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.501
+        "opacity" : 0.6
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.501
+        "value" : 0.2
       }
     }
   ],

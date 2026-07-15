@@ -274,6 +274,11 @@ struct AquaWidgetView: View {
     @Environment(\.widgetFamily) var family
     @Environment(\.widgetRenderingMode) var renderingMode
     @Environment(\.colorScheme) private var colorScheme
+    /// Whether WidgetKit is drawing the removable container background (false
+    /// in Liquid Glass / vibrant lock-screen contexts where the wallpaper shows
+    /// through). Used with `renderingMode` to decide when a content-layer
+    /// backdrop is needed for edge-to-edge fill.
+    @Environment(\.showsWidgetContainerBackground) private var showsWidgetContainerBackground
     // Default content margins, reapplied manually to the text/button after the
     // widget opts out of automatic margins (so the water can bleed edge-to-edge
     // as content while the chrome keeps its original inset).
@@ -286,10 +291,29 @@ struct AquaWidgetView: View {
     /// palette, so they stay legible on the dark backdrop without any
     /// scheme-specific branching here.
     private var theme: AppTheme { .forID(entry.themeID, scheme: colorScheme) }
+    /// Aqua home-widget water fill — `#008EEC` (icon droplet blue); Kurosawa uses `theme.waterColor`.
+    private var widgetWaterFillColor: Color {
+        switch theme.id {
+        case .default:
+            return Color(red: 0x00 / 255.0, green: 0x8E / 255.0, blue: 0xEC / 255.0)
+        case .kurosawa:
+            return theme.waterColor
+        }
+    }
     private var isHydrated: Bool { entry.hydrationLevel > 0 }
     private var headerOnWater: Bool { entry.hydrationLevel >= 0.80 }
     private var buttonOnWater: Bool { entry.hydrationLevel > 0.15 }
     private var isTinted: Bool { renderingMode == .accented }
+    /// Full-color contexts (home screen default, iPad Lock Screen gallery
+    /// preview) need an explicit content-layer backdrop so the dehydrated panel
+    /// bleeds edge-to-edge. WidgetKit can inset the removable
+    /// `containerBackground` in those contexts (notably iPad Lock Screen) even
+    /// with `.contentMarginsDisabled()` — Apple's WWDC pattern is to paint the
+    /// backdrop in the content `ZStack` and keep `containerBackground` for
+    /// removal signaling only.
+    private var usesFullColorBackdrop: Bool {
+        renderingMode == .fullColor && showsWidgetContainerBackground
+    }
 
     private var headerColor: Color {
         if headerOnWater {
@@ -312,7 +336,9 @@ struct AquaWidgetView: View {
         if headerOnWater {
             return isTinted ? Color(white: 0.1) : theme.headerPrimaryOnWater
         }
-        return theme.statsPrimary
+        // Match the title — black/near-black on the light dehydrated backdrop,
+        // not the muted stats gray used in the main app's stats overlay.
+        return theme.headerPrimary
     }
 
     /// Title font for the widget header. Mirrors `ThemeID.headerTitleFont` in
@@ -349,6 +375,10 @@ struct AquaWidgetView: View {
 
     private var homeView: some View {
         ZStack(alignment: .bottom) {
+            if usesFullColorBackdrop {
+                widgetBackground
+            }
+
             waterFill
                 .widgetAccentable()
 
@@ -379,6 +409,7 @@ struct AquaWidgetView: View {
             }
             .padding(contentMargins)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .containerBackground(for: .widget) { widgetBackground }
     }
 
@@ -482,7 +513,7 @@ struct AquaWidgetView: View {
             let wavePhase = entry.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4
 
             WidgetWaveShape(phase: wavePhase)
-                .fill(theme.waterColor)
+                .fill(widgetWaterFillColor)
                 // Tinted/clear Home Screen appearances system-tint all content
                 // white, so an opaque water fill matches the header + button and
                 // vanishes. 70 % transparency keeps the level readable.

@@ -1,4 +1,7 @@
 {
+  "features" : [
+    "refractivity"
+  ],
   "fill" : {
     "linear-gradient" : [
       "display-p3:0.84316,0.84316,0.84316,1.00000",
@@ -62,22 +65,6 @@
               -208.56451250000003
             ]
           }
-        },
-        {
-          "fill" : {
-            "automatic-gradient" : "display-p3:0.94223,0.94223,0.94223,1.00000"
-          },
-          "glass" : false,
-          "hidden" : false,
-          "image-name" : "Frame s6.png",
-          "name" : "Frame s6",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              0,
-              229.7109375
-            ]
-          }
         }
       ],
       "shadow" : {
@@ -90,6 +77,7 @@
       }
     },
     {
+      "blur-material" : 0.09,
       "hidden" : false,
       "layers" : [
         {
@@ -130,13 +118,60 @@
           }
         }
       ],
+      "name" : "Group",
+      "opacity" : 0.76,
+      "refractivity" : {
+        "depth" : 0.355,
+        "enabled" : true,
+        "strength" : 0.9470000000000001
+      },
       "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
+        "kind" : "layer-color",
+        "opacity" : 1
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.5
+        "value" : 0.39
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "display-p3:0.94223,0.94223,0.94223,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : "system-light"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "system-light"
+            }
+          ],
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "Frame s6.png",
+          "name" : "Frame s6",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              229.7109375
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.6
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
       }
     }
   ],
